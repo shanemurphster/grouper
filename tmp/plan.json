@@ -1,0 +1,87 @@
+{
+  "timeframe": "oneWeek",
+  "deliverables": [
+    {
+      "title": "Bridge Construction",
+      "description": "A small cardboard bridge designed to span a gap while supporting significant load."
+    },
+    {
+      "title": "Design Explanation",
+      "description": "Explanation of the engineering principles and design choices affecting bridge performance."
+    },
+    {
+      "title": "Presentation Document",
+      "description": "A slide deck summarizing the design, construction, testing, and lessons learned."
+    }
+  ],
+  "bundles": [
+    {
+      "label": "Person 1",
+      "bundle_title": "Design & Analysis",
+      "bundle_summary": "Focus on design choices and analytical explanation.",
+      "tasks": [
+        {
+          "title": "Research Load Distribution",
+          "details": "Done when a summary of load distribution principles is documented.",
+          "category": "Research",
+          "size": "M",
+          "effort_points": 2
+        },
+        {
+          "title": "Draft Design Document",
+          "details": "Done when a written plan detailing bridge design and materials is completed.",
+          "category": "Writing",
+          "size": "L",
+          "effort_points": 3
+        }
+      ]
+    },
+    {
+      "label": "Person 2",
+      "bundle_title": "Construction & Documentation",
+      "bundle_summary": "Hands-on construction and documentation of the process.",
+      "tasks": [
+        {
+          "title": "Build the Bridge",
+          "details": "Done when a functional bridge is constructed according to the design document.",
+          "category": "Coding",
+          "size": "L",
+          "effort_points": 3
+        },
+        {
+          "title": "Photograph Construction Process",
+          "details": "Done when a series of clear photos documenting each build step is taken.",
+          "category": "Design",
+          "size": "S",
+          "effort_points": 1
+        }
+      ]
+    },
+    {
+      "label": "Person 3",
+      "bundle_title": "Testing & Presentation",
+      "bundle_summary": "Conducts tests and prepares presentation of findings.",
+      "tasks": [
+        {
+          "title": "Perform Load Tests",
+          "details": "Done when the bridge is tested under increasing weight until failure.",
+          "category": "Analysis",
+          "size": "M",
+          "effort_points": 2
+        },
+        {
+          "title": "Create Presentation Slides",
+          "details": "Done when a complete slide deck summarizing the project is created.",
+          "category": "Slides",
+          "size": "L",
+          "effort_points": 3
+        }
+      ]
+    }
+  ],
+  "assumptions": [
+    "All materials will be provided as planned.",
+    "Team members have equal access to tools needed for construction.",
+    "Each member will contribute equally to the workload."
+  ]
+}

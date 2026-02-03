@@ -1,0 +1,40 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect x="32" y="32" width="448" height="448" rx="112" fill="#FFFFFF"/>
+
+  <!-- Bold G -->
+  <path
+    d="M256 144
+       C196 144 148 192 148 256
+       C148 320 196 368 256 368
+       C302 368 342 340 358 300"
+    stroke="#0F172A"
+    stroke-width="32"
+    stroke-linecap="round"
+    fill="none"
+  />
+  <path
+    d="M360 260H280"
+    stroke="#0F172A"
+    stroke-width="32"
+    stroke-linecap="round"
+  />
+
+  <!-- Wavy mark (blue to red, smoother + more official) -->
+  <path
+    d="M150 324
+       C190 292 230 292 270 324
+       C310 356 350 356 390 324"
+    stroke="#1D4ED8"
+    stroke-width="18"
+    stroke-linecap="round"
+  />
+  <path
+    d="M150 350
+       C190 318 230 318 270 350
+       C310 382 350 382 390 350"
+    stroke="#B91C1C"
+    stroke-width="18"
+    stroke-linecap="round"
+  />
+</svg>
+

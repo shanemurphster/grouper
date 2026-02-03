@@ -1,0 +1,15 @@
+For this project, your group will design and construct a small bridge using only cardboard and basic household materials. The goal is to explore how structural design choices affect strength, stability, and material efficiency.
+
+The bridge must span a fixed gap and support as much load as possible without collapsing. Exact dimensions and testing procedures will be provided separately, but you should assume the bridge will be evaluated under increasing weight until failure.
+
+In addition to building the bridge, your group is responsible for explaining why your design works (or fails) from a physics and engineering perspective. This explanation should connect observed behavior during testing to concepts discussed in class, such as forces, moments, load distribution, and material properties.
+
+You will prepare a short presentation that documents your design process, shows how the bridge was constructed, and discusses test results. The presentation should clearly explain what design decisions were made, what tradeoffs were considered, and how the final design performed.
+
+The project will be graded based on a combination of structural performance, quality of the explanation, and evidence of collaboration. Teams should divide work in a reasonable way and demonstrate that all members contributed meaningfully to both the construction and the analysis.
+
+You are expected to document your work as you go. Take photos during construction, record measurements during testing, and note any unexpected issues or failures. These materials may be included in your presentation or written explanation.
+
+The bridge does not need to look polished, but it should be thoughtfully designed and carefully assembled. Safety and clarity of explanation are more important than aesthetics.
+
+The project is due in one week. A brief write-up or slide deck should be submitted along with the bridge itself, summarizing your design, results, and conclusions.

@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx supabase functions deploy:*)",
+      "Bash(curl:*)",
+      "Bash(python3:*)",
+      "Bash(node -e:*)",
+      "Bash(grep:*)",
+      "Bash(head:*)",
+      "Bash(git diff:*)"
+    ]
+  }
+}

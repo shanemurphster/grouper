@@ -191,6 +191,35 @@ export async function listMyProjectsServer({ includeArchived = false }: { includ
 	return includeArchived ? out : out.filter((p) => !p.isArchived);
 }
 
+export async function listMyTasksServer() {
+	const user = await getUser();
+	const uid = user?.id;
+	if (!uid) return [];
+
+	const { data: memberships, error: memErr } = await supabase
+		.from("project_members")
+		.select("id,project:projects(id,name,timeframe,join_code,assignment_title)")
+		.eq("user_id", uid);
+	if (memErr) throw memErr;
+	const memberIds = (memberships ?? []).map((m: any) => m.id).filter(Boolean);
+	if (memberIds.length === 0) return [];
+
+	const { data: tasks, error: tErr } = await supabase
+		.from("tasks")
+		.select("*, project:projects(id,name,timeframe,join_code,assignment_title)")
+		.in("owner_member_id", memberIds)
+		.order("created_at", { ascending: true });
+	if (tErr) throw tErr;
+
+	return (tasks ?? []).map((task: any) => ({
+		...task,
+		projectId: task.project?.id ?? task.project_id,
+		projectName: task.project?.name ?? "",
+		timeframe: task.project?.timeframe ?? "",
+		ownerMemberId: task.owner_member_id,
+	}));
+}
+
 export async function setProjectArchivedServer({ projectId, isArchived }: { projectId: string; isArchived: boolean }) {
 	const user = await requireUser();
 	const uid = user.id;

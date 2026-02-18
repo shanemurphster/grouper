@@ -78,6 +78,8 @@ export async function updateTaskServer(taskId: string, patch: Partial<any>) {
 	if (toUpdate.status !== undefined) allowed.status = toUpdate.status;
 	if (toUpdate.owner_member_id !== undefined) allowed.owner_member_id = toUpdate.owner_member_id;
 	if (toUpdate.ownerMemberId !== undefined) allowed.owner_member_id = toUpdate.ownerMemberId;
+	if (toUpdate.bundle_id !== undefined) allowed.bundle_id = toUpdate.bundle_id;
+	if (toUpdate.bundleId !== undefined) allowed.bundle_id = toUpdate.bundleId;
 	if (toUpdate.blocked !== undefined) allowed.blocked = toUpdate.blocked;
 	if (toUpdate.blockedReason !== undefined) allowed.blocked_reason = toUpdate.blockedReason;
 	if (toUpdate.updated_at !== undefined) allowed.updated_at = toUpdate.updated_at;

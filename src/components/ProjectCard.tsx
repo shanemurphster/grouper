@@ -1,6 +1,7 @@
 import React from "react";
 import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
 import { colors } from "../theme/colors";
+import { formatTimeframe } from "../utils/formatTimeframe";
 
 type Props = {
 	project: any;
@@ -16,7 +17,7 @@ export default function ProjectCard({ project, onPress }: Props) {
 			<View style={styles.content}>
 				<View style={{ flex: 1 }}>
 					<Text style={styles.title}>{project.name}</Text>
-					<Text style={styles.subtitle}>{project.timeframe}</Text>
+					<Text style={styles.subtitle}>{formatTimeframe(project.timeframe)}</Text>
 
 					{/* small stats only when present and meaningful */}
 					{(Array.isArray(project.tasks) && project.tasks.length > 0) || (Array.isArray(project.deliverables) && project.deliverables.length > 0) ? (

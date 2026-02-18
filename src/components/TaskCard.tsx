@@ -10,33 +10,58 @@ type Props = {
 	onDelete?: () => void;
 	onReassign?: () => void;
 	onAddLink?: () => void;
+	bundleColor?: string;
+	bundleAccent?: string;
+	ownerLabel?: string | null;
 };
 
-export default function TaskCard({ task, onDone, onReassign, onAddLink, onDelete }: Props) {
+export default function TaskCard({
+	task,
+	onDone,
+	onReassign,
+	onAddLink,
+	onDelete,
+	bundleColor,
+	bundleAccent,
+	ownerLabel,
+}: Props) {
+	const accentStyle = bundleAccent ? { borderColor: bundleAccent, borderWidth: 1 } : null;
 	return (
-		<View style={styles.card}>
+		<View style={[styles.card, bundleColor ? { backgroundColor: bundleColor } : null, accentStyle]}>
 			<View style={{ flexDirection: "row", alignItems: "center" }}>
 				<TouchableOpacity onPress={onDone} style={styles.checkbox} accessibilityLabel="Toggle done">
 					<Text style={{ fontSize: 18 }}>{task.status === "done" ? "☑" : "☐"}</Text>
 				</TouchableOpacity>
 				<CategoryChip category={task.category ?? "Research"} />
 				<View style={{ flex: 1, marginLeft: 12 }}>
-					{/* size prefix */}
-					<Text style={[styles.title, task.status === "done" ? styles.titleDone : null]}>
-						{(task.size === "L" && "Large — ") || (task.size === "M" && "Medium — ") || (task.size === "S" && "Small — ") || ""}
-						{task.title}
-					</Text>
-					<Text style={styles.subtitle}>{task.category} • {task.size}</Text>
-					{task.url ? <Text style={{ color: colors.pennBlue, marginTop: 6 }}>{task.url}</Text> : null}
+					<Text style={[styles.title, task.status === "done" ? styles.titleDone : null]}>{task.title}</Text>
+					{task.details ? <Text style={styles.details}>{task.details}</Text> : null}
+					{task.url ? <Text style={styles.linkText}>{task.url}</Text> : null}
 				</View>
 				<View style={{ alignItems: "flex-end" }}>
-					<Text style={[styles.owner, { backgroundColor: getColorForMember(task.ownerMemberId ?? ""), paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, color: colors.white }]}>{task.ownerMemberId ?? "Unassigned"}</Text>
+					<Text
+						style={[
+							styles.owner,
+							{
+								backgroundColor: getColorForMember(task.ownerMemberId ?? ""),
+								paddingHorizontal: 8,
+								paddingVertical: 4,
+								borderRadius: 8,
+								color: colors.white,
+							},
+						]}
+					>
+						{ownerLabel ?? (task.ownerMemberId ? "Member" : "Unassigned")}
+					</Text>
 					<View style={{ flexDirection: "row", marginTop: 8 }}>
 						<TouchableOpacity onPress={onReassign} style={[styles.actionBtn, { marginLeft: 8 }]}>
 							<Text style={styles.actionText}>Reassign</Text>
 						</TouchableOpacity>
 						{task.blocked ? (
-							<TouchableOpacity onPress={() => {}} style={[styles.actionBtn, { marginLeft: 8, backgroundColor: "#FEF3C7" }]}>
+							<TouchableOpacity
+								onPress={() => {}}
+								style={[styles.actionBtn, { marginLeft: 8, backgroundColor: "#FEF3C7" }]}
+							>
 								<Text style={{ color: "#B45309", fontWeight: "700" }}>Blocked</Text>
 							</TouchableOpacity>
 						) : null}
@@ -86,10 +111,13 @@ const styles = StyleSheet.create({
 		fontWeight: "700",
 		color: colors.text,
 	},
-	subtitle: {
-		fontSize: 12,
-		color: colors.subtleText,
+	details: {
 		marginTop: 4,
+		color: "#374151",
+	},
+	linkText: {
+		marginTop: 4,
+		color: colors.primaryBlue,
 	},
 	owner: {
 		fontSize: 12,

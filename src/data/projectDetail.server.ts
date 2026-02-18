@@ -13,11 +13,49 @@ export async function fetchProjectDetail(projectId: string) {
 	if (pErr) throw pErr;
 
 	// members (include id=project_members.id which is memberId)
-	const { data: members, error: mErr } = await supabase.from("project_members").select("id,project_id,user_id,display_name,is_archived").eq("project_id", projectId);
+	const { data: members, error: mErr } = await supabase
+		.from("project_members")
+		.select("id,project_id,user_id,display_name,is_archived")
+		.eq("project_id", projectId);
 	if (mErr) throw mErr;
+	const memberRows = members ?? [];
+	const { data: userData } = await supabase.auth.getUser();
+	const uid = userData?.user?.id ?? null;
+
+	// profiles for those members (to get full_name/email fallback)
+	const uuidRegex = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+	const userIds = memberRows
+		.map((m: any) => m.user_id)
+		.filter((id): id is string => Boolean(id) && typeof id === "string" && uuidRegex.test(id));
+	let profileMap: Record<string, any> = {};
+	if (userIds.length > 0) {
+		try {
+			const { data: profiles } = await supabase
+				.from("profiles")
+				.select("user_id,full_name,school,avatar_url")
+				.in("user_id", userIds);
+			profileMap = (profiles ?? []).reduce<Record<string, any>>((acc, p: any) => {
+				if (p.user_id) acc[p.user_id] = p;
+				return acc;
+			}, {});
+		} catch (profileErr) {
+			console.error("fetchProjectDetail: failed to load profiles", profileErr);
+		}
+	}
+
+	// determine the current member record before loading tasks
+	let myMemberId: string | null = null;
+	if (uid) {
+		const matching = memberRows.find((m: any) => m.user_id === uid);
+		if (matching) myMemberId = matching.id;
+	}
 
 	// tasks
-	const { data: tasks, error: tErr } = await supabase.from("tasks").select("*").eq("project_id", projectId).order("created_at", { ascending: true });
+	const { data: tasks, error: tErr } = await supabase
+		.from("tasks")
+		.select("*")
+		.eq("project_id", projectId)
+		.order("created_at", { ascending: true });
 	if (tErr) throw tErr;
 
 	// deliverables
@@ -39,13 +77,25 @@ export async function fetchProjectDetail(projectId: string) {
 	// task bundles
 	const { data: taskBundles, error: tbErr } = await supabase.from("task_bundles").select("*").eq("project_id", projectId).order("created_at", { ascending: true });
 	if (tbErr) throw tbErr;
+	// planned members
+	const { data: plannedMembers, error: pmErr } = await supabase
+		.from("project_planned_members")
+		.select("*")
+		.eq("project_id", projectId)
+		.order("created_at", { ascending: true });
+	if (pmErr) throw pmErr;
 	// normalize members/tasks/resources shape for client
-	const normalizedMembers = (members ?? []).map((m: any) => ({
+	const normalizedMembers = memberRows.map((m: any) => ({
 		id: m.id,
 		project_id: m.project_id,
 		user_id: m.user_id,
 		displayName: m.display_name ?? m.displayName ?? "",
 		is_archived: m.is_archived ?? false,
+		profile: profileMap[m.user_id ?? ""] ?? null,
+	}));
+	const normalizedPlannedMembers = (plannedMembers ?? []).map((m: any) => ({
+		id: m.id,
+		displayName: m.display_name ?? m.displayName ?? "Planned member",
 	}));
 
 	const normalizedTasks = (tasks ?? []).map((t: any) => ({
@@ -57,6 +107,8 @@ export async function fetchProjectDetail(projectId: string) {
 		status: t.status,
 		size: t.size,
 		ownerMemberId: t.owner_member_id ?? t.ownerMemberId ?? null,
+		bundle_id: t.bundle_id ?? t.bundleId ?? null,
+		bundleId: t.bundle_id ?? t.bundleId ?? null,
 		createdAt: t.created_at ?? t.createdAt,
 		updatedAt: t.updated_at ?? t.updatedAt,
 		blocked: t.blocked ?? false,
@@ -81,6 +133,7 @@ export async function fetchProjectDetail(projectId: string) {
 		id: b.id,
 		project_id: b.project_id,
 		title: b.title,
+		label: b.label ?? b.title ?? "Bundle",
 		summary: b.summary ?? null,
 		total_points: b.total_points ?? null,
 		claimed_by_member_id: b.claimed_by_member_id ?? null,
@@ -88,15 +141,18 @@ export async function fetchProjectDetail(projectId: string) {
 		updatedAt: b.updated_at ?? null,
 	}));
 
-	// myMemberId
-	const { data: userData } = await supabase.auth.getUser();
-	const uid = userData?.user?.id;
-	let myMemberId: string | null = null;
-	if (uid) {
-		const found = normalizedMembers.find((m: any) => m.user_id === uid);
-		if (found) myMemberId = found.id;
-	}
-	return { project, members: normalizedMembers, tasks: normalizedTasks, deliverables: deliverables ?? [], requests: requests ?? [], projectResources: normalizedResources, taskLinks: taskLinks ?? [], taskBundles: normalizedBundles, myMemberId };
+	return {
+		project,
+		members: normalizedMembers,
+		tasks: normalizedTasks,
+		deliverables: deliverables ?? [],
+		requests: requests ?? [],
+		projectResources: normalizedResources,
+		taskLinks: taskLinks ?? [],
+		taskBundles: normalizedBundles,
+		myMemberId,
+		plannedMembers: normalizedPlannedMembers,
+	};
 }
 
 export async function addProjectResource(
@@ -207,7 +263,7 @@ export async function deleteTaskLink(linkId: string) {
 export async function updateProjectNotes(projectId: string, notes: string) {
 	const { data, error } = await supabase
 		.from("projects")
-		.update({ project_ai_notes: notes })
+		.update({ project_notes: notes, project_ai_notes: notes, updated_at: new Date().toISOString() })
 		.eq("id", projectId)
 		.select("*")
 		.single();

@@ -3,7 +3,7 @@ import { View, Text, FlatList, TouchableOpacity } from "react-native";
 import AppButton from "../../src/components/AppButton";
 import { useRouter } from "expo-router";
 import { signOut } from "../../src/api/supabase";
-import { listMyProjectsServer } from "../../src/data/projects.server";
+import { listMyProjectsServer, listMyTasksServer } from "../../src/data/projects.server";
 // AppHeader provided by global Stack header
 import { getProfile } from "../../src/data/profile.server";
 import { loadProjects } from "../../src/data/projects.local";
@@ -12,8 +12,7 @@ import { themeStyles } from "../../src/theme/styles";
 import GradientHeader from "../../src/components/GradientHeader";
 import TaskBubble from "../../src/components/TaskBubble";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-
-const LOCAL_MEMBER_ID_KEY = "gpai_localMemberId";
+import { formatTimeframe } from "../../src/utils/formatTimeframe";
 
 export default function HomeRoute() {
 	const router = useRouter();
@@ -23,8 +22,8 @@ export default function HomeRoute() {
 
 	useEffect(() => {
 		reload();
-		// load profile for greeting
-		(async () => {
+	// load profile for greeting
+	(async () => {
 			try {
 				const sess = await (await import("../../src/api/supabase")).getSession();
 				const user = sess?.data?.session?.user;
@@ -46,35 +45,20 @@ export default function HomeRoute() {
 			const ps = await listMyProjectsServer();
 			setProjects(ps ?? []);
 		} catch (e) {
-			// fallback to local
 			const ps = await loadProjects();
 			setProjects(ps ?? []);
 		}
+
+		try {
+			const tasks = await listMyTasksServer();
+			const filtered = (tasks ?? []).filter((t: any) => !t.status || t.status !== "done");
+			setNextTasks(filtered.slice(0, 5));
+		} catch (e) {
+			setNextTasks([]);
+		}
 	}
 
-	// collect next tasks assigned to me
-	const [localId, setLocalId] = useState<string | null>(null);
 	const [nextTasks, setNextTasks] = useState<any[]>([]);
-
-	useEffect(() => {
-		AsyncStorage.getItem(LOCAL_MEMBER_ID_KEY).then((v) => setLocalId(v));
-	}, []);
-
-	useEffect(() => {
-		// compute top 5 tasks assigned to me
-		if (!projects || projects.length === 0 || !localId) {
-			setNextTasks([]);
-			return;
-		}
-		const allTasks: any[] = [];
-		projects.forEach((p) => {
-			(p.tasks ?? []).forEach((t: any) => {
-				if (t.ownerMemberId === localId && t.status !== "done") allTasks.push({ ...t, projectId: p.id, projectName: p.name });
-			});
-		});
-		const sorted = allTasks.slice(0, 5);
-		setNextTasks(sorted);
-	}, [projects, localId]);
 	const recentProjects = projects.slice(0, 5);
 
 	return (
@@ -89,12 +73,16 @@ export default function HomeRoute() {
 					</View>
 				) : (
 					<View style={{ marginTop: 8 }}>
-						<FlatList
-							data={nextTasks}
-							horizontal
-							keyExtractor={(t) => t.id}
-							renderItem={({ item }) => <TaskBubble title={item.title} />}
-						/>
+							<FlatList
+								data={nextTasks}
+								horizontal
+								keyExtractor={(t) => t.id}
+								renderItem={({ item }) => (
+									<TouchableOpacity onPress={() => router.push(`/project/${item.projectId}`)}>
+										<TaskBubble title={item.title} />
+									</TouchableOpacity>
+								)}
+							/>
 					</View>
 				)}
 			</View>
@@ -109,7 +97,7 @@ export default function HomeRoute() {
 					recentProjects.map((p) => (
 						<TouchableOpacity key={p.id} onPress={() => router.push(`/project/${p.id}`)} style={{ marginTop: 8 }}>
 							<Text style={{ fontWeight: "600" }}>{p.name}</Text>
-							<Text style={{ color: "#6B7280" }}>{p.timeframe}</Text>
+							<Text style={{ color: "#6B7280" }}>{formatTimeframe(p.timeframe)}</Text>
 						</TouchableOpacity>
 					))
 				)}

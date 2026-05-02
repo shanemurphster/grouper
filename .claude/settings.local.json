@@ -7,7 +7,16 @@
       "Bash(node -e:*)",
       "Bash(grep:*)",
       "Bash(head:*)",
-      "Bash(git diff:*)"
+      "Bash(git diff:*)",
+      "Bash(git ls-tree:*)",
+      "Bash(git remote add:*)",
+      "Bash(git push:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(sed:*)",
+      "Bash(npx tsc:*)",
+      "Bash(ls:*)",
+      "Bash(supabase functions deploy:*)"
     ]
   }
 }

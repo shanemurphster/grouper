@@ -93,7 +93,7 @@ export async function generatePlan(
 		};
 		console.log("text.format.schema.type:", finalFormat.schema.type);
 
-		const model = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
+		const model = process.env.OPENAI_MODEL ?? "gpt-5-mini";
 		let data: any = null;
 		try {
 			// eslint-disable-next-line @typescript-eslint/no-var-requires

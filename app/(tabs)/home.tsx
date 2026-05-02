@@ -78,8 +78,12 @@ export default function HomeRoute() {
 								horizontal
 								keyExtractor={(t) => t.id}
 								renderItem={({ item }) => (
-									<TouchableOpacity onPress={() => router.push(`/project/${item.projectId}`)}>
+									<TouchableOpacity
+										onPress={() => router.push(`/project/${item.projectId}`)}
+										style={{ marginRight: 12, minWidth: 140 }}
+									>
 										<TaskBubble title={item.title} />
+										<Text style={{ fontSize: 12, color: "#6B7280", marginTop: 4 }}>{item.projectName ?? "Project"}</Text>
 									</TouchableOpacity>
 								)}
 							/>

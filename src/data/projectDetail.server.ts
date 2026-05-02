@@ -182,31 +182,61 @@ export async function addProjectResource(
 	return data;
 }
 
-export async function uploadProjectFile(projectId: string, uri: string, filename?: string) {
-	// read file and upload to storage
-	const fileName = filename ?? uri.split("/").pop() ?? "file";
+export async function addDeliverable(projectId: string, title: string, url?: string | null) {
+	const payload = {
+		project_id: projectId,
+		title,
+		url: url ?? null,
+	};
+	const { data, error } = await supabase.from("deliverables").insert(payload).select("*").single();
+	if (error) throw error;
+	return data;
+}
+
+/**
+ * Upload a file to project storage.
+ * Accepts either:
+ *   - A native asset with `uri` (mobile) — fetches the URI to get bytes
+ *   - A web `File` object — uploads directly
+ */
+export async function uploadProjectFile(
+	projectId: string,
+	source: string | File,
+	filename?: string,
+) {
+	const isWebFile = typeof source === "object" && source instanceof File;
+	const fileName = filename ?? (isWebFile ? source.name : (source as string).split("/").pop()) ?? "file";
 	const fileExt = fileName.split(".").pop() ?? "bin";
 	const user = await supabase.auth.getUser();
 	const uid = user?.data?.user?.id ?? "unknown";
 	const id = (uuid && typeof uuid.v4 === "function" ? uuid.v4() : `${Date.now()}-${Math.floor(Math.random() * 10000)}`) as string;
 	const path = `${projectId}/${uid}/${id}-${fileName}`;
 
-	console.log("uploadProjectFile: uploading", { bucket: STORAGE_BUCKET, path, uri });
+	console.log("uploadProjectFile: uploading", { bucket: STORAGE_BUCKET, path, isWebFile });
 
-	let contentType: string | undefined = undefined;
 	try {
-		const response = await fetch(uri);
-		if (!response.ok) throw new Error(`Failed to fetch file at ${uri}: ${response.status}`);
-		const arrayBuffer = await response.arrayBuffer();
-		// attempt to detect content type from response headers or fallback
-		contentType = response.headers.get("Content-Type") ?? `application/${fileExt}`;
+		let uploadData: Blob | Uint8Array;
+		let contentType: string;
+		let sizeBytes: number;
 
-		// Prefer Blob where available (browser / expo). Fallback to Uint8Array.
-		let uploadData: any;
-		if (typeof Blob !== "undefined") {
-			uploadData = new Blob([arrayBuffer], { type: contentType });
+		if (isWebFile) {
+			// Web File object — upload directly
+			contentType = source.type || `application/${fileExt}`;
+			sizeBytes = source.size;
+			uploadData = source;
 		} else {
-			uploadData = new Uint8Array(arrayBuffer);
+			// Native URI — fetch bytes
+			const uri = source as string;
+			const response = await fetch(uri);
+			if (!response.ok) throw new Error(`Failed to fetch file at ${uri}: ${response.status}`);
+			const arrayBuffer = await response.arrayBuffer();
+			contentType = response.headers.get("Content-Type") ?? `application/${fileExt}`;
+			sizeBytes = arrayBuffer.byteLength;
+			if (typeof Blob !== "undefined") {
+				uploadData = new Blob([arrayBuffer], { type: contentType });
+			} else {
+				uploadData = new Uint8Array(arrayBuffer);
+			}
 		}
 
 		const { data, error } = await supabase.storage.from(STORAGE_BUCKET).upload(path, uploadData, { upsert: false, contentType });
@@ -214,11 +244,9 @@ export async function uploadProjectFile(projectId: string, uri: string, filename
 			console.error("supabase storage upload error", error);
 			throw error;
 		}
-		// size in bytes
-		const sizeBytes = (arrayBuffer && (arrayBuffer as any).byteLength) ?? null;
 		return {
 			path,
-			mime_type: contentType ?? `application/${fileExt}`,
+			mime_type: contentType,
 			size_bytes: sizeBytes,
 		};
 	} catch (e) {
@@ -263,10 +291,18 @@ export async function deleteTaskLink(linkId: string) {
 export async function updateProjectNotes(projectId: string, notes: string) {
 	const { data, error } = await supabase
 		.from("projects")
-		.update({ project_notes: notes, project_ai_notes: notes, updated_at: new Date().toISOString() })
+		.update({ project_notes: notes, updated_at: new Date().toISOString() })
 		.eq("id", projectId)
 		.select("*")
 		.single();
+	if (error) throw error;
+	return data;
+}
+
+export async function extractFileText(projectId: string, resourceId: string) {
+	const { data, error } = await supabase.functions.invoke("extract-file-text", {
+		body: { project_id: projectId, resource_id: resourceId },
+	});
 	if (error) throw error;
 	return data;
 }
@@ -278,5 +314,6 @@ export default {
 	addTaskLink,
 	deleteTaskLink,
 	updateProjectNotes,
+	extractFileText,
 };
 

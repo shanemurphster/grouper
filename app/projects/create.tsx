@@ -9,12 +9,18 @@ import { useRouter } from "expo-router";
 // for full file-picking support on native platforms.
 import { createProjectServer } from "../../src/data/projects.server";
 import { supabase } from "../../src/data/supabaseClient";
-import { addProjectResource, uploadProjectFile } from "../../src/data/projectDetail.server";
+import { addProjectResource, uploadProjectFile, extractFileText } from "../../src/data/projectDetail.server";
+import { retryPlan } from "../../src/data/plan.server";
+import { normalizePickedFiles, PickedFile } from "../../src/lib/files/normalizePickedFiles";
 import Toast from "../../src/components/Toast";
 
-type SelectedFile = {
-	uri: string;
+type SelectedFile = PickedFile;
+
+type FileUploadStatus = "pending" | "uploading" | "extracting" | "done" | "failed";
+type FileUploadRow = {
 	name: string;
+	status: FileUploadStatus;
+	error?: string;
 };
 
 export default function CreateProjectRoute() {
@@ -27,37 +33,23 @@ export default function CreateProjectRoute() {
 	const [groupSizeError, setGroupSizeError] = useState<string | null>(null);
 	const [selectedFiles, setSelectedFiles] = useState<SelectedFile[]>([]);
 	const [submitting, setSubmitting] = useState(false);
-	const [uploadFailures, setUploadFailures] = useState<Array<{ file: SelectedFile; error: string }>>([]);
+	const [uploadRows, setUploadRows] = useState<FileUploadRow[]>([]);
+	const [verifiedCount, setVerifiedCount] = useState<number | null>(null);
 	const [createdProjectId, setCreatedProjectId] = useState<string | null>(null);
 	const [toast, setToast] = useState<{ message: string; type?: "info" | "error" | "success" } | null>(null);
 	const [debugBlock, setDebugBlock] = useState<string | null>(null);
 
 	async function pickFile() {
 		try {
-			// dynamic import avoids bundler errors when the package is not installed for web
 			const DocumentPicker = await import("expo-document-picker").then((m) => m.default ?? m);
-			// allow multiple selection where supported and restrict to PDFs/images
-			const res = await DocumentPicker.getDocumentAsync({ multiple: true, copyToCacheDirectory: true, type: ["application/pdf", "image/*"] });
-			if ((res as any).type === "cancel") return;
-			// handle multiple vs single return shapes (some versions use `output`, `results`, or `uri`)
-			const maybeArray = (res as any).output ?? (res as any).results ?? (res as any).files ?? null;
-			if (Array.isArray(maybeArray) && maybeArray.length > 0) {
-				const outputs = maybeArray as any[];
-				const picked = outputs.map((o) => ({ uri: o.uri ?? o.uri, name: o.name ?? o.filename ?? o.uri.split("/").pop() ?? "file" }));
+			const res = await DocumentPicker.getDocumentAsync({
+				multiple: true,
+				copyToCacheDirectory: true,
+				type: ["application/pdf", "image/*"],
+			});
+			const picked = normalizePickedFiles(res);
+			if (picked.length > 0) {
 				setSelectedFiles((s) => [...s, ...picked]);
-			} else if ((res as any).uri) {
-				const uri = (res as any).uri;
-				const name = (res as any).name ?? (res as any).name ?? uri.split("/").pop() ?? "file";
-				setSelectedFiles((s) => [...s, { uri, name }]);
-			} else {
-				// unknown shape; attempt to coerce by scanning res for uri-like props
-				const entries = Object.values(res as any).filter((v) => v && typeof v === "object" && v.uri);
-				if (entries.length > 0) {
-					const picked = entries.map((o: any) => ({ uri: o.uri, name: o.name ?? o.filename ?? o.uri.split("/").pop() ?? "file" }));
-					setSelectedFiles((s) => [...s, ...picked]);
-				} else {
-					console.warn("Unknown DocumentPicker result", res);
-				}
 			}
 		} catch (e) {
 			console.error("pickFile failed", e);
@@ -69,24 +61,66 @@ export default function CreateProjectRoute() {
 		setSelectedFiles((s) => s.filter((_, i) => i !== idx));
 	}
 
+	function updateUploadRow(index: number, update: Partial<FileUploadRow>) {
+		setUploadRows((rows) => rows.map((r, i) => (i === index ? { ...r, ...update } : r)));
+	}
+
 	async function tryUploadFiles(projectId: string, files: SelectedFile[]) {
-		const failed: Array<{ file: SelectedFile; error: string }> = [];
-		for (const f of files) {
+		// Initialize upload rows for tracking
+		setUploadRows(files.map((f) => ({ name: f.name, status: "pending" as FileUploadStatus })));
+
+		let failCount = 0;
+		for (let i = 0; i < files.length; i++) {
+			const f = files[i];
 			try {
-				const uploaded = await uploadProjectFile(projectId, f.uri, f.name);
-				await addProjectResource(projectId, {
+				// Phase: Uploading
+				updateUploadRow(i, { status: "uploading" });
+				const source = f.file ?? f.uri;
+				if (!source) throw new Error("No file source (no File object or URI)");
+				const uploaded = await uploadProjectFile(projectId, source, f.name);
+				const resource = await addProjectResource(projectId, {
 					label: f.name,
 					type: "file",
 					file_path: uploaded.path,
 					mime_type: uploaded.mime_type,
 					size_bytes: uploaded.size_bytes,
 				});
+				console.log("tryUploadFiles: resource inserted", { resource_id: resource.id, name: f.name });
+
+				// Phase: Extracting text
+				updateUploadRow(i, { status: "extracting" });
+				console.log("tryUploadFiles: calling extract-file-text", { resource_id: resource.id });
+				try {
+					const extractResult = await extractFileText(projectId, resource.id);
+					console.log("tryUploadFiles: extract-file-text success", { resource_id: resource.id, chars_written: extractResult?.chars_written });
+				} catch (extractErr) {
+					console.warn("tryUploadFiles: extract-file-text failed", { resource_id: resource.id, name: f.name, error: String((extractErr as any)?.message ?? extractErr) });
+					// Non-fatal: file is uploaded, text extraction is best-effort
+				}
+
+				// Phase: Done
+				updateUploadRow(i, { status: "done" });
 			} catch (e: any) {
 				console.error("file upload failed", f.name, e);
-				failed.push({ file: f, error: e?.message ?? String(e) });
+				const errMsg = e?.message ?? String(e);
+				updateUploadRow(i, { status: "failed", error: errMsg.length > 80 ? errMsg.slice(0, 80) + "..." : errMsg });
+				failCount++;
 			}
 		}
-		return failed;
+
+		// Verify persistence: refetch project_resources and show confirmed count
+		try {
+			const { data: resources } = await supabase
+				.from("project_resources")
+				.select("id")
+				.eq("project_id", projectId)
+				.eq("type", "file");
+			setVerifiedCount(resources?.length ?? 0);
+		} catch {
+			// non-fatal
+		}
+
+		return failCount;
 	}
 
 	async function createProject() {
@@ -104,72 +138,49 @@ export default function CreateProjectRoute() {
 		setGroupSizeError(null);
 		setSubmitting(true);
 		setToast(null);
-		// setup timeout: abort request after 180 seconds (3 minutes)
-		const controller = new AbortController();
-		const timeoutMs = 180 * 1000; // 180 seconds
-		const timeoutId = setTimeout(() => {
-			controller.abort();
-		}, timeoutMs);
 		try {
-			// log function URL and session presence
-			const fnUrl = `${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/create-project-with-ai`;
-			console.log("CreateProject: calling function URL:", fnUrl);
-			const { data: sessionData } = await supabase.auth.getSession();
-			const accessToken = sessionData?.session?.access_token ?? null;
-			console.log("CreateProject: session present:", !!sessionData, "access_token present:", !!accessToken);
-
 			// generate a client-side trace id
 			const traceId = (globalThis.crypto && (globalThis.crypto as any).randomUUID) ? (globalThis.crypto as any).randomUUID() : `${Date.now()}-${Math.floor(Math.random()*100000)}`;
-			// payload summary log
-			console.log("CreateProject: payload summary", { name: name || "Untitled Project", timeframe, groupSize: groupSize ?? 1, assignment_len: (assignmentDetails || "").length, traceId });
+			console.log("CreateProject: payload summary", { name: name || "Untitled Project", timeframe, groupSize: groupSize ?? 1, assignment_len: (assignmentDetails || "").length, traceId, filesCount: selectedFiles.length });
 
-			const projectId = await createProjectServer(
-				{
-					name: name || "Untitled Project",
-					timeframe,
-					assignmentDetails: assignmentDetails || undefined,
-					groupSize: groupSize ?? undefined,
-					joinCode: `${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
-					description: description || undefined,
-					trace_id: traceId,
-				},
-				{ signal: controller.signal }
-			);
-			console.log("CreateProject: createProjectServer returned projectId:", projectId);
-			// Navigate to project page now that project and AI persistence are complete
+			// Phase 1: Create project without AI (debug_skip_openai)
+			setToast({ message: "Creating project...", type: "info" });
+			const projectId = await createProjectServer({
+				name: name || "Untitled Project",
+				timeframe,
+				assignmentDetails: assignmentDetails || undefined,
+				groupSize: groupSize ?? undefined,
+				joinCode: `${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
+				description: description || undefined,
+				trace_id: traceId,
+				debug_skip_openai: true,
+			});
+			console.log("CreateProject: project created (no AI yet), projectId:", projectId);
 			setCreatedProjectId(projectId);
+
+			// Phase 2: Upload files + extract text (before AI sees them)
+			if (selectedFiles.length > 0) {
+				setToast({ message: `Uploading ${selectedFiles.length} file(s)...`, type: "info" });
+				const failCount = await tryUploadFiles(projectId, selectedFiles);
+				if (failCount > 0) {
+					const successCount = selectedFiles.length - failCount;
+					console.warn(`CreateProject: ${failCount} file uploads failed, ${successCount} succeeded`);
+				}
+			}
+
+			// Phase 3: Trigger AI plan generation (reads file text from DB)
+			setToast({ message: "Generating AI plan...", type: "info" });
+			const planResult = await retryPlan(projectId, true);
+			console.log("CreateProject: AI plan generated for projectId:", projectId, "bundles:", planResult?.inserted_bundle_count, "tasks:", planResult?.inserted_task_count);
+
+			// Phase 4: Navigate to project page
 			setToast({ message: "Project created", type: "success" });
 			router.push(`/project/${projectId}`);
-
-			// Upload files in background (do not block navigation)
-			(async () => {
-				if ((selectedFiles ?? []).length === 0) return;
-				try {
-					const failed = await tryUploadFiles(projectId, selectedFiles);
-					const successCount = (selectedFiles?.length ?? 0) - failed.length;
-					if (failed.length > 0) {
-						setUploadFailures(failed);
-						setToast({ message: `Uploaded ${successCount} files, ${failed.length} failed`, type: "error" });
-					} else {
-						setToast({ message: `Uploaded ${successCount} files`, type: "success" });
-					}
-				} catch (e) {
-					console.error("background upload failed", e);
-					setToast({ message: `Background upload failed: ${String(e)}`, type: "error" });
-				}
-			})();
 		} catch (e: any) {
 			console.error("createProject failed", e);
-			if (e?.name === "AbortError") {
-				console.log("create-with-ai aborted after", timeoutMs, "ms");
-				setDebugBlock(`Request aborted after ${timeoutMs}ms. Plan generation may be slow; try again or retry from the project page.`);
-				setToast({ message: "Plan generation is taking too long. Please try again or retry from the project page.", type: "error" });
-			}
-			// log err.name + err.message for visibility
 			try {
 				console.error("createProject error:", e?.name, e?.message);
 			} catch {}
-			// If error contains EDGE_DEBUG payload, extract and surface a debug block
 			const msg = String(e?.message ?? e);
 			if (msg.startsWith("EDGE_DEBUG:")) {
 				const idx = msg.indexOf("\n\n");
@@ -183,7 +194,6 @@ export default function CreateProjectRoute() {
 				}
 				setToast({ message: userMsg, type: "error" });
 			} else if (msg.startsWith("Create project failed:")) {
-				// parse "Create project failed: <status> <body>"
 				const parts = msg.replace("Create project failed:", "").trim();
 				const firstSpace = parts.indexOf(" ");
 				let status = parts;
@@ -197,38 +207,8 @@ export default function CreateProjectRoute() {
 				setDebugBlock(`status: ${status}\n\nresponse:\n${truncated}`);
 				setToast({ message: `Create failed: ${status}`, type: "error" });
 			} else {
-				if (e?.name === "AbortError") {
-					setToast({ message: "Create timed out after 3 minutes. Please try again.", type: "error" });
-				} else {
-					setToast({ message: `Create failed: ${String(e)}`, type: "error" });
-				}
+				setToast({ message: `Create failed: ${String(e)}`, type: "error" });
 			}
-		} finally {
-			clearTimeout(timeoutId);
-			// always stop spinner/buffering
-			setSubmitting(false);
-		}
-	}
-
-	async function retryUploads(projectId: string) {
-		if ((uploadFailures ?? []).length === 0) return;
-		setSubmitting(true);
-		setToast(null);
-		try {
-			// extract files from failures
-			const filesToRetry = uploadFailures.map((f) => f.file);
-			const failed = await tryUploadFiles(projectId, filesToRetry);
-			if (failed.length > 0) {
-				setUploadFailures(failed);
-				setToast({ message: `Some uploads still failed: ${failed.map((f) => f.file.name).join(", ")}`, type: "error" });
-			} else {
-				setUploadFailures([]);
-				setToast({ message: "Uploads completed", type: "success" });
-				router.push(`/project/${projectId}`);
-			}
-		} catch (e) {
-			console.error("retryUploads failed", e);
-			setToast({ message: "Retry failed", type: "error" });
 		} finally {
 			setSubmitting(false);
 		}
@@ -322,35 +302,37 @@ export default function CreateProjectRoute() {
 				<View style={styles.section}>
 					<Text style={{ marginBottom: 8, fontWeight: "600", color: colors.text }}>Files (optional)</Text>
 					<View style={{ flexDirection: "row", marginTop: 8, marginBottom: 8 }}>
-						<AppButton title="Add files" variant="secondary" onPress={pickFile} />
+						<AppButton title="Add files" variant="secondary" onPress={pickFile} disabled={submitting} />
 					</View>
-					{selectedFiles.map((f, i) => (
-						<View key={i} style={{ flexDirection: "row", alignItems: "center", marginTop: 6 }}>
-							<Text style={{ flex: 1 }}>{f.name}</Text>
-							<TouchableOpacity onPress={() => removeFile(i)} style={{ padding: 8 }}>
-								<Text style={{ color: colors.pennRed }}>Remove</Text>
+
+					{/* Pre-upload: selected files with remove buttons */}
+					{uploadRows.length === 0 && selectedFiles.map((f, i) => (
+						<View key={i} style={styles.fileRow}>
+							<Text style={styles.fileName} numberOfLines={1}>{f.name}</Text>
+							<Text style={styles.fileBadge}>Pending</Text>
+							<TouchableOpacity onPress={() => removeFile(i)} style={{ padding: 6 }}>
+								<Text style={{ color: colors.pennRed, fontSize: 12 }}>Remove</Text>
 							</TouchableOpacity>
 						</View>
 					))}
-					{uploadFailures.length > 0 ? (
-						<View style={{ marginTop: 12 }}>
-							<Text style={{ color: colors.pennRed, marginBottom: 6 }}>Uploads failed for:</Text>
-							{uploadFailures.map((f, i) => (
-								<View key={i} style={{ flexDirection: "row", alignItems: "center", marginTop: 4 }}>
-									<Text style={{ flex: 1 }}>{f.file.name}</Text>
-									<Text style={{ color: colors.pennRed, marginLeft: 8 }}>{f.error}</Text>
+
+					{/* During/after upload: status tracker */}
+					{uploadRows.length > 0 ? (
+						<View style={{ marginTop: 4 }}>
+							{uploadRows.map((row, i) => (
+								<View key={i} style={styles.fileRow}>
+									<Text style={styles.fileName} numberOfLines={1}>{row.name}</Text>
+									<FileStatusBadge status={row.status} />
+									{row.status === "failed" && row.error ? (
+										<Text style={{ color: colors.pennRed, fontSize: 11, marginLeft: 6, flex: 1 }} numberOfLines={1}>{row.error}</Text>
+									) : null}
 								</View>
 							))}
-							<AppButton
-								title="Retry uploads"
-								variant="primary"
-								onPress={() => {
-									if (createdProjectId) {
-										retryUploads(createdProjectId);
-									}
-								}}
-								disabled={!createdProjectId}
-							/>
+							{verifiedCount !== null ? (
+								<Text style={{ color: "#16A34A", fontSize: 12, fontWeight: "600", marginTop: 6 }}>
+									{verifiedCount} file(s) saved
+								</Text>
+							) : null}
 						</View>
 					) : null}
 				</View>
@@ -372,6 +354,32 @@ export default function CreateProjectRoute() {
 				</View>
 			) : null}
 		</ScrollView>
+	);
+}
+
+const STATUS_COLORS: Record<FileUploadStatus, { bg: string; text: string }> = {
+	pending: { bg: "#F3F4F6", text: "#6B7280" },
+	uploading: { bg: "#DBEAFE", text: "#2563EB" },
+	extracting: { bg: "#E0E7FF", text: "#4338CA" },
+	done: { bg: "#DCFCE7", text: "#16A34A" },
+	failed: { bg: "#FEE2E2", text: "#DC2626" },
+};
+const STATUS_LABELS: Record<FileUploadStatus, string> = {
+	pending: "Pending",
+	uploading: "Uploading...",
+	extracting: "Extracting...",
+	done: "Done",
+	failed: "Failed",
+};
+
+function FileStatusBadge({ status }: { status: FileUploadStatus }) {
+	const c = STATUS_COLORS[status];
+	const showSpinner = status === "uploading" || status === "extracting";
+	return (
+		<View style={{ flexDirection: "row", alignItems: "center", backgroundColor: c.bg, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 }}>
+			{showSpinner ? <ActivityIndicator size="small" color={c.text} style={{ marginRight: 4 }} /> : null}
+			<Text style={{ fontSize: 11, fontWeight: "700", color: c.text }}>{STATUS_LABELS[status]}</Text>
+		</View>
 	);
 }
 
@@ -417,5 +425,28 @@ const styles = {
 		textAlign: "center",
 		borderRadius: 6,
 		backgroundColor: "#fff",
+	},
+	fileRow: {
+		flexDirection: "row" as const,
+		alignItems: "center" as const,
+		paddingVertical: 6,
+		paddingHorizontal: 4,
+		borderBottomWidth: 1,
+		borderBottomColor: "#F3F4F6",
+		gap: 8,
+	},
+	fileName: {
+		flex: 1,
+		fontSize: 13,
+		color: "#374151",
+	},
+	fileBadge: {
+		fontSize: 11,
+		fontWeight: "600" as const,
+		color: "#6B7280",
+		backgroundColor: "#F3F4F6",
+		paddingHorizontal: 8,
+		paddingVertical: 3,
+		borderRadius: 6,
 	},
 };

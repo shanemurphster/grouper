@@ -27,6 +27,7 @@ export type Task = {
 	category: Category;
 	status: TaskStatus;
 	size: TaskSize;
+	effortPoints: number;
 	bundleId?: string | null;
 	updatedAt?: string;
 	blocked?: boolean;

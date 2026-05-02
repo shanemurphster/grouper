@@ -90,59 +90,87 @@ export default async function handler(req: Request) {
 			});
 			const latency = Date.now() - start;
 
+			const planBundles = plan.bundles ?? [];
+			const planBundleCount = planBundles.length;
+			const planTaskCount = planBundles.reduce((sum, bundle) => sum + (bundle.tasks?.length ?? 0), 0);
+			console.info("persist-plan: plan ready", { project_id, planBundleCount, planTaskCount });
+
 			// Upsert bundles (do NOT delete bundles; keep them durable)
-			const { data: existingBundles } = await supabase.from("task_bundles").select("id,label,claimed_by_member_id").eq("project_id", project_id);
-			const existingByLabel: Record<string, any> = {};
-			(existingBundles ?? []).forEach((b: any) => {
-				if (b.label) existingByLabel[b.label] = b;
+			const { data: existingBundles } = await supabase
+				.from("task_bundles")
+				.select("id,label,title,summary,claimed_by_member_id")
+				.eq("project_id", project_id);
+
+			const buildBundleKey = (input: { label?: string | null; bundle_title?: string | null; title?: string | null }) => {
+				const label = input.label ?? "";
+				const title = input.bundle_title ?? input.title ?? "";
+				return `${label}::${title}`;
+			};
+
+			const existingByKey: Record<string, any> = {};
+			(existingBundles ?? []).forEach((bundle) => {
+				const key = buildBundleKey({ label: bundle.label, title: bundle.title });
+				existingByKey[key] = bundle;
 			});
 
-			const bundleIdByLabel: Record<string, string> = {};
-			for (const b of plan.bundles) {
-				const label = b.label ?? null;
-				if (!label) continue;
-				const existing = existingByLabel[label];
+			const bundleIdByKey: Record<string, string> = {};
+			const insertedBundleRecords: any[] = [];
+			for (const bundle of planBundles) {
+				const key = buildBundleKey({ label: bundle.label, bundle_title: bundle.bundle_title });
+				if (!key.trim()) {
+					throw new Error("Plan bundle missing label/title");
+				}
+				const existing = existingByKey[key];
 				if (existing) {
-					// update title/summary but do not change claimed_by_member_id
 					await supabase
 						.from("task_bundles")
-						.update({ title: b.bundle_title ?? label, summary: b.bundle_summary ?? null, updated_at: new Date().toISOString() })
+						.update({ title: bundle.bundle_title ?? existing.title, summary: bundle.bundle_summary ?? existing.summary ?? null, updated_at: new Date().toISOString() })
 						.eq("id", existing.id);
-					bundleIdByLabel[label] = existing.id;
+					bundleIdByKey[key] = existing.id;
 				} else {
 					const { data: inserted, error: insErr } = await supabase
 						.from("task_bundles")
-						.insert([{ project_id, label, title: b.bundle_title ?? label, summary: b.bundle_summary ?? null, created_at: new Date().toISOString() }])
+						.insert([
+							{
+								project_id,
+								label: bundle.label,
+								title: bundle.bundle_title,
+								summary: bundle.bundle_summary ?? null,
+								total_points: bundle.total_points ?? null,
+								created_at: new Date().toISOString(),
+							},
+						])
 						.select("*")
 						.single();
 					if (insErr) throw insErr;
-					bundleIdByLabel[label] = inserted.id;
+					insertedBundleRecords.push(inserted);
+					bundleIdByKey[key] = inserted.id;
 				}
 			}
 
 			// Replace AI-generated tasks per bundle (do not touch manual tasks)
 			let tasksResultCount = 0;
-			for (const b of plan.bundles) {
-				const label = b.label ?? null;
-				if (!label) continue;
-				const bundleId = bundleIdByLabel[label];
-				if (!bundleId) continue;
-				// find claimed_by_member_id for this bundle (if any)
-				const claimedRow = existingByLabel[label];
+			for (const bundle of planBundles) {
+				const key = buildBundleKey({ label: bundle.label, bundle_title: bundle.bundle_title });
+				const bundleId = bundleIdByKey[key];
+				if (!bundleId) {
+					throw new Error(`Unable to map plan bundle to task_bundles row: ${key}`);
+				}
+				const claimedRow = existingByKey[key];
 				const claimedMemberId = claimedRow?.claimed_by_member_id ?? null;
 
 				// delete only AI-generated tasks for this bundle
 				await supabase.from("tasks").delete().eq("bundle_id", bundleId).eq("is_ai_generated", true);
 
-				// insert new AI tasks, if the bundle is claimed, assign owner_member_id to claiming member
 				const tasksToInsert: any[] = [];
-				for (const t of b.tasks) {
+				for (const task of bundle.tasks) {
 					tasksToInsert.push({
 						project_id,
-						title: t.title,
-						details: t.details ?? null,
-						category: t.category,
-						size: t.size,
+						title: task.title,
+						details: task.details ?? null,
+						category: task.category,
+						size: task.size,
+						effort_points: task.effort_points ?? task.effortPoints ?? 0,
 						status: "todo",
 						owner_member_id: claimedMemberId ?? null,
 						bundle_id: bundleId,
@@ -157,6 +185,39 @@ export default async function handler(req: Request) {
 				}
 			}
 
+			// log DB counts for verification
+			const bundleCountResult = await supabase
+				.from("task_bundles")
+				.select("id", { count: "exact", head: true })
+				.eq("project_id", project_id);
+			const taskCountResult = await supabase
+				.from("tasks")
+				.select("id", { count: "exact", head: true })
+				.eq("project_id", project_id);
+			const tasksWithoutBundleResult = await supabase
+				.from("tasks")
+				.select("id", { count: "exact", head: true })
+				.eq("project_id", project_id)
+				.is("bundle_id", null);
+			console.info("persist-plan: post-insert counts", {
+				project_id,
+				bundle_count: bundleCountResult.count ?? 0,
+				task_count: taskCountResult.count ?? 0,
+				tasks_without_bundle: tasksWithoutBundleResult.count ?? 0,
+			});
+
+			// replace persistent deliverables with AI-provided ones
+			await supabase.from("deliverables").delete().eq("project_id", project_id);
+			if ((plan.deliverables ?? []).length > 0) {
+				const deliverablesToInsert = (plan.deliverables ?? []).map((d: any) => ({
+					project_id,
+					title: d.title ?? "Deliverable",
+					url: d.url ?? null,
+					created_at: new Date().toISOString(),
+				}));
+				await supabase.from("deliverables").insert(deliverablesToInsert);
+			}
+
 			// persist plan_payload and mark ready
 			await supabase.from("projects").update({ plan_payload: plan, plan_status: "ready", plan_error: null, updated_at: new Date().toISOString() }).eq("id", project_id);
 			// update ai_responses
@@ -167,7 +228,19 @@ export default async function handler(req: Request) {
 					.eq("id", aiId);
 			}
 
-			return new Response(JSON.stringify({ status: "ready", bundles_inserted: insertedBundles.length, tasks_inserted: tasksResultCount }), { status: 200 });
+			return new Response(
+				JSON.stringify({
+					status: "ready",
+					plan_bundle_count: planBundleCount,
+					plan_task_count: planTaskCount,
+					bundles_inserted: insertedBundleRecords.length,
+					tasks_inserted: tasksResultCount,
+					bundle_count: bundleCountResult.count ?? 0,
+					task_count: taskCountResult.count ?? 0,
+					tasks_without_bundle: tasksWithoutBundleResult.count ?? 0,
+				}),
+				{ status: 200 }
+			);
 		} catch (e: any) {
 			const code = e?.code ?? "AI_PERSIST_FAILED";
 			const msg = e?.message ?? String(e);

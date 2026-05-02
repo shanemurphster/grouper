@@ -32,9 +32,16 @@ export default function TaskCard({
 				<TouchableOpacity onPress={onDone} style={styles.checkbox} accessibilityLabel="Toggle done">
 					<Text style={{ fontSize: 18 }}>{task.status === "done" ? "☑" : "☐"}</Text>
 				</TouchableOpacity>
-				<CategoryChip category={task.category ?? "Research"} />
 				<View style={{ flex: 1, marginLeft: 12 }}>
-					<Text style={[styles.title, task.status === "done" ? styles.titleDone : null]}>{task.title}</Text>
+					<Text style={[styles.title, task.status === "done" ? styles.titleDone : null]} numberOfLines={1}>
+						{task.title}
+					</Text>
+					<View style={styles.metaRow}>
+						<CategoryChip category={task.category ?? "Research"} />
+						<Text style={styles.metaText}>
+							{task.size ? task.size : "Size?"} · {task.status}
+						</Text>
+					</View>
 					{task.details ? <Text style={styles.details}>{task.details}</Text> : null}
 					{task.url ? <Text style={styles.linkText}>{task.url}</Text> : null}
 				</View>
@@ -110,6 +117,16 @@ const styles = StyleSheet.create({
 		fontSize: 15,
 		fontWeight: "700",
 		color: colors.text,
+	},
+	metaRow: {
+		marginTop: 4,
+		flexDirection: "row",
+		alignItems: "center",
+		gap: 6,
+	},
+	metaText: {
+		fontSize: 12,
+		color: colors.subtleText,
 	},
 	details: {
 		marginTop: 4,

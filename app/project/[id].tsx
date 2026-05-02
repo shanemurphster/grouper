@@ -5,7 +5,7 @@ import AppButton from "../../src/components/AppButton";
 import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import { getProject, upsertProject } from "../../src/storage/repo";
 import { fetchProjectBundleServer } from "../../src/data/projects.server";
-import { fetchProjectDetail, addProjectResource, deleteProjectResource, addTaskLink, deleteTaskLink, uploadProjectFile, getSignedFileUrl } from "../../src/data/projectDetail.server";
+	import { fetchProjectDetail, addProjectResource, deleteProjectResource, addTaskLink, deleteTaskLink, uploadProjectFile, getSignedFileUrl } from "../../src/data/projectDetail.server";
 import { useSession } from "../../src/state/sessionStore";
 import Toast from "../../src/components/Toast";
 import { updateTaskServer, deleteTaskServer } from "../../src/data/tasks.server";
@@ -15,7 +15,9 @@ import Snackbar from "../../src/components/Snackbar";
 import { themeStyles } from "../../src/theme/styles";
 import { colors } from "../../src/theme/colors";
 import { retryPlan } from "../../src/data/plan.server";
+import { reassignTaskRpc } from "../../src/lib/supabase/rpcs/reassignTask";
 import { formatTimeframe } from "../../src/utils/formatTimeframe";
+import { normalizePickedFiles } from "../../src/lib/files/normalizePickedFiles";
 
 export default function ProjectDetailRoute() {
 	const { id } = useLocalSearchParams() as { id: string };
@@ -46,13 +48,15 @@ export default function ProjectDetailRoute() {
 	const [newLinkLabel, setNewLinkLabel] = useState("");
 	const [newLinkUrl, setNewLinkUrl] = useState("");
 	const [addingLink, setAddingLink] = useState(false);
-	const [addingDeliverableType, setAddingDeliverableType] = useState<"link" | "text" | null>(null);
-	const [newDeliverableLabel, setNewDeliverableLabel] = useState("");
-	const [newDeliverableUrl, setNewDeliverableUrl] = useState("");
-	const [newDeliverableText, setNewDeliverableText] = useState("");
 	const [selectedFile, setSelectedFile] = useState<{ uri: string; name: string; mime?: string; size?: number } | null>(null);
 	const [notes, setNotes] = useState<string>("");
 	const [savingNotes, setSavingNotes] = useState(false);
+	const [addDeliverableOpen, setAddDeliverableOpen] = useState(false);
+	const [newDeliverableTitle, setNewDeliverableTitle] = useState("");
+	const [newDeliverableUrl, setNewDeliverableUrl] = useState("");
+	const [addingDeliverable, setAddingDeliverable] = useState(false);
+	const [normalizationAlert, setNormalizationAlert] = useState(false);
+	const [retryingNormalization, setRetryingNormalization] = useState(false);
 	const sessionCtx = useSession();
 	const sessionMemberId = sessionCtx?.memberships?.[id] ?? null;
 	const [reassignTaskId, setReassignTaskId] = useState<string | null>(null);
@@ -88,11 +92,12 @@ export default function ProjectDetailRoute() {
 	const resolvedMemberId = myMemberId ?? sessionMemberId ?? null;
 	const aiDeliverableItems = (deliverables ?? []).filter((d: any) => d.isDeliverable);
 	const remainingTasksCount = (tasks ?? []).filter((t: any) => t.status !== "done").length;
+	const fileResources = useMemo(() => (resources ?? []).filter((r: any) => r.type === "file"), [resources]);
 
 	// sync notes when project loads
 	useEffect(() => {
 		if (!project) return;
-		setNotes(project.project_notes ?? project.project_ai_notes ?? project.ai_notes ?? "");
+		setNotes(project.project_notes ?? project.ai_notes ?? "");
 	}, [project]);
 
 	useFocusEffect(
@@ -114,6 +119,11 @@ export default function ProjectDetailRoute() {
 				setResources(detail.projectResources ?? []);
 				setPlannedMembers(detail.plannedMembers ?? []);
 				setTaskLinks(detail.taskLinks ?? []);
+				const bundleCount = (detail.taskBundles ?? []).length;
+				const taskCount = (detail.tasks ?? []).length;
+				const planPayloadExists = Boolean(detail.project?.plan_payload);
+				console.info("project detail counts", { project_id: id, planPayloadExists, bundleCount, taskCount });
+				setNormalizationAlert(planPayloadExists && bundleCount === 0 && taskCount === 0);
 				// combine explicit deliverables table rows and project_resources link/text entries
 				const fromDeliverables = (detail.deliverables ?? []).map((d: any) => ({
 					id: d.id,
@@ -142,6 +152,7 @@ export default function ProjectDetailRoute() {
 			}
 		} catch (e) {
 			// fallback to local
+			setNormalizationAlert(false);
 		}
 		const p = await getProject(id);
 		if (!p) return;
@@ -154,17 +165,36 @@ export default function ProjectDetailRoute() {
 		setMyMemberId(sessionMemberId ?? null);
 	}
 
+	async function handleRetryNormalization() {
+		if (!id || retryingNormalization) return;
+		setRetryingNormalization(true);
+		setToast({ message: "Retrying normalization...", type: "info" });
+		try {
+			await retryPlan(id, true);
+			setToast({ message: "Normalization retried; refreshing...", type: "success" });
+			await reload();
+		} catch (e: any) {
+			console.error("retryNormalization failed", e);
+			setToast({ message: `Retry failed: ${e?.message ?? String(e)}`, type: "error" });
+		} finally {
+			setRetryingNormalization(false);
+		}
+	}
+
 	async function handleClaimBundle(bundleId: string) {
 		if (!id) return;
 		try {
 			setToast({ message: "Claiming bundle...", type: "info" });
-			const optimisticMemberId = resolvedMemberId;
-			if (optimisticMemberId) {
-				setBundles((bs) => bs.map((b) => (b.id === bundleId ? { ...b, claimed_by_member_id: optimisticMemberId } : b)));
-				setTasks((ts) => ts.map((t) => (t.bundle_id === bundleId && !t.ownerMemberId ? { ...t, ownerMemberId: optimisticMemberId } : t)));
+			try {
+				const { claimBundleRpc } = await import("../../src/lib/supabase/rpcs/claimBundle");
+				const res = await claimBundleRpc(bundleId);
+				if (res?.bundle_id === bundleId) {
+					setBundles((bs) => bs.map((b) => (b.id === bundleId ? { ...b, claimed_by_member_id: res.claimed_by_member_id ?? resolvedMemberId } : b)));
+					setTasks((ts) => ts.map((t) => (t.bundle_id === bundleId && (!t.ownerMemberId || t.ownerMemberId === null) ? { ...t, ownerMemberId: res.claimed_by_member_id ?? resolvedMemberId } : t)));
+				}
+			} catch (e) {
+				throw e;
 			}
-			const { claimBundle } = await import("../../src/data/taskBundles.server");
-			await claimBundle(id, bundleId);
 			setToast({ message: "Bundle claimed", type: "success" });
 			await reload();
 		} catch (e: any) {
@@ -239,23 +269,30 @@ export default function ProjectDetailRoute() {
 		setReassigning(true);
 		setToast({ message: "Reassigning task...", type: "info" });
 		try {
-			const currentTask = tasks?.find((t: any) => t.id === taskId);
-			const currentBundleId = currentTask?.bundle_id ?? currentTask?.bundleId ?? null;
-			const targetBundleId = getBundleIdForMember(targetId);
-			const newBundleId = targetId ? targetBundleId ?? currentBundleId : null;
-			await updateTaskServer(taskId, { owner_member_id: targetId, bundle_id: newBundleId });
-			setTasks((ts) =>
-				ts.map((t) =>
-					t.id === taskId
-						? {
-								...t,
-								ownerMemberId: targetId,
-								bundleId: newBundleId,
-								bundle_id: newBundleId,
-						  }
-						: t
-				)
-			);
+			if (!targetId) {
+				await updateTaskServer(taskId, { owner_member_id: null, bundle_id: null });
+				setTasks((ts) =>
+					ts.map((t) =>
+						t.id === taskId
+							? { ...t, ownerMemberId: null, bundle_id: null, bundleId: null }
+							: t
+					)
+				);
+			} else {
+				const res = await reassignTaskRpc(taskId, targetId);
+				setTasks((ts) =>
+					ts.map((t) =>
+						t.id === taskId
+							? {
+									...t,
+									ownerMemberId: res?.owner_member_id ?? targetId,
+									bundle_id: res?.bundle_id ?? t.bundle_id,
+									bundleId: res?.bundle_id ?? t.bundleId,
+							  }
+							: t
+					)
+				);
+			}
 			setToast({ message: "Task reassigned", type: "success" });
 			setReassignTaskId(null);
 		} catch (e: any) {
@@ -360,8 +397,9 @@ export default function ProjectDetailRoute() {
 				await addProjectResource(id, { label: newResourceLabel, type: "text", text_content: newResourceText });
 			} else if (newResourceType === "file") {
 				if (!selectedFile) throw new Error("No file selected");
-				// upload file then insert resource row
-				const uploadRes = await uploadProjectFile(id, selectedFile.uri, selectedFile.name);
+				// upload file then insert resource row — use web File if available, else URI
+				const source = (selectedFile as any).file instanceof File ? (selectedFile as any).file : selectedFile.uri;
+				const uploadRes = await uploadProjectFile(id, source, selectedFile.name);
 				await addProjectResource(id, {
 					label: newResourceLabel,
 					type: "file",
@@ -412,9 +450,32 @@ async function saveNotes() {
 	}
 }
 
+async function handleAddDeliverable() {
+	if (!id) return;
+	if (!newDeliverableTitle) {
+		setToast({ message: "Provide a title", type: "error" });
+		return;
+	}
+	setAddingDeliverable(true);
+	try {
+		const { addDeliverable } = await import("../../src/data/projectDetail.server");
+		await addDeliverable(id, newDeliverableTitle, newDeliverableUrl ?? null);
+		setToast({ message: "Deliverable added", type: "success" });
+		setNewDeliverableTitle("");
+		setNewDeliverableUrl("");
+		setAddDeliverableOpen(false);
+		await reload();
+	} catch (e: any) {
+		console.error("addDeliverable failed", e);
+		setToast({ message: `Add failed: ${e?.message ?? String(e)}`, type: "error" });
+	} finally {
+		setAddingDeliverable(false);
+	}
+}
+
 	// grouping by member
 	const claimedBundleIds = new Set((bundles ?? []).filter((b) => Boolean(b.claimed_by_member_id)).map((b) => b.id));
-	const unassignedTasks = (tasks ?? []).filter((t: any) => !t.ownerMemberId);
+	// unassigned tasks hidden per request (no display)
 	const tasksByMember: Record<string, any[]> = {};
 	(members ?? []).forEach((m) => {
 		tasksByMember[m.id] = (tasks ?? []).filter((t: any) => t.ownerMemberId === m.id);
@@ -542,20 +603,58 @@ async function saveNotes() {
 						</View>
 					) : null}
 
-					{/* Assignment (collapsible) */}
-					{(project.assignmentTitle || project.assignmentDetails) ? (
+					{/* Assignment (collapsible, default collapsed) */}
+					{(project.assignmentTitle || project.assignmentDetails || project.assignment_details || fileResources.length > 0) ? (() => {
+						const assignText = (project.assignmentDetails ?? project.assignment_details ?? "").trim();
+						const assignTitle = (project.assignmentTitle ?? project.assignment_title ?? "").trim();
+						const isExpanded = collapsed.assignment === true; // inverted: true = expanded
+						return (
 						<View style={{ marginTop: 12 }}>
-							<TouchableOpacity onPress={() => setCollapsed((c) => ({ ...c, assignment: !c.assignment }))} style={{ marginBottom: 8 }}>
-								<Text style={{ fontWeight: "700", color: colors.primaryRed }}>Assignment</Text>
-							</TouchableOpacity>
-							{!collapsed.assignment ? (
-								<View style={{ backgroundColor: "#fff", padding: 12, borderRadius: 12 }}>
-									{project.assignmentTitle ? <Text style={{ fontWeight: "700", marginBottom: 6 }}>{project.assignmentTitle}</Text> : null}
-									{project.assignmentDetails ? <Text style={{ color: "#374151" }}>{project.assignmentDetails}</Text> : <Text style={{ color: "#6B7280" }}>No assignment details</Text>}
+							<TouchableOpacity
+								onPress={() => setCollapsed((c) => ({ ...c, assignment: !c.assignment }))}
+								style={{ backgroundColor: "#fff", padding: 12, borderRadius: 12 }}
+								activeOpacity={0.7}
+							>
+								<View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+									<Text style={{ fontWeight: "700", color: colors.primaryRed, fontSize: 15 }}>Assignment</Text>
+									<Text style={{ color: "#9CA3AF", fontSize: 16 }}>{isExpanded ? "▾" : "▸"}</Text>
 								</View>
-							) : null}
+
+								{/* Collapsed preview */}
+								{!isExpanded ? (
+									<View style={{ marginTop: 6 }}>
+										{assignTitle ? <Text style={{ fontWeight: "600", color: "#374151", marginBottom: 2 }} numberOfLines={1}>{assignTitle}</Text> : null}
+										{assignText ? (
+											<Text style={{ color: "#6B7280", fontSize: 13, lineHeight: 18 }} numberOfLines={2}>{assignText}</Text>
+										) : fileResources.length > 0 ? (
+											<Text style={{ color: "#6B7280", fontSize: 13, fontStyle: "italic" }}>Provided via attached files</Text>
+										) : null}
+										{fileResources.length > 0 ? (
+											<Text style={{ color: "#9CA3AF", fontSize: 12, marginTop: 4 }}>{fileResources.length} file(s) attached</Text>
+										) : null}
+									</View>
+								) : null}
+
+								{/* Expanded full content */}
+								{isExpanded ? (
+									<View style={{ marginTop: 8 }}>
+										{assignTitle ? <Text style={{ fontWeight: "700", marginBottom: 6, color: "#0F172A" }}>{assignTitle}</Text> : null}
+										{assignText ? (
+											<Text style={{ color: "#374151", lineHeight: 20 }}>{assignText}</Text>
+										) : fileResources.length > 0 ? (
+											<Text style={{ color: "#6B7280", fontStyle: "italic" }}>Assignment provided via {fileResources.length} attached file(s)</Text>
+										) : (
+											<Text style={{ color: "#6B7280" }}>No assignment details</Text>
+										)}
+										{fileResources.length > 0 ? (
+											<Text style={{ color: "#6B7280", marginTop: 8, fontSize: 12 }}>{fileResources.length} file(s) attached</Text>
+										) : null}
+									</View>
+								) : null}
+							</TouchableOpacity>
 						</View>
-					) : null}
+						);
+					})() : null}
 
 			{/* Plan generation status and retry */}
 			{project?.plan_status === "failed" ? (
@@ -583,6 +682,22 @@ async function saveNotes() {
 					<Text style={{ color: "#6B7280", fontWeight: "600" }}>Generating plan...</Text>
 				</View>
 			) : null}
+
+					{normalizationAlert ? (
+						<View style={{ marginTop: 12, backgroundColor: "#fef3c7", padding: 12, borderRadius: 10 }}>
+							<Text style={{ fontWeight: "600", color: "#92400e" }}>Plan exists but tasks not normalized.</Text>
+							<Text style={{ color: "#92400e", marginBottom: 8 }}>Tap to retry normalization.</Text>
+							<View style={{ flexDirection: "row" }}>
+								<AppButton
+									title={retryingNormalization ? "Retrying..." : "Retry normalization"}
+									variant="secondary"
+									onPress={handleRetryNormalization}
+									disabled={retryingNormalization}
+									loading={retryingNormalization}
+								/>
+							</View>
+						</View>
+					) : null}
 
 					{/* Tasks grouped by member */}
 					{/* Member bubbles */}
@@ -737,62 +852,66 @@ async function saveNotes() {
 								</View>
 							</View>
 						)})}
-						{/* Unassigned bubble */}
-						<View key="unassigned" style={styles.bubble}>
-							<View style={styles.bubbleHeader}>
-								<View style={styles.avatar}>
-									<Text style={{ color: "#fff", fontWeight: "700" }}>—</Text>
-								</View>
-								<Text style={styles.memberName}>Unassigned</Text>
-								<Text style={styles.memberCount}>{unassignedTasks.length}</Text>
-							</View>
-							<View style={styles.bubbleBody}>
-								{unassignedTasks.length === 0 ? (
-									<Text style={{ color: "#6B7280" }}>No tasks</Text>
-								) : (
-									unassignedTasks.map((task: any) => (
-										<View key={task.id} style={{ marginBottom: 8 }}>
-											<TaskCard
-												task={task}
-												onDone={() => toggleTaskDone(task)}
-												onReassign={() => {}}
-												onAddLink={() => openLinkModal(task)}
-												onDelete={() => deleteTask(task)}
-												ownerLabel={getOwnerLabelForId(task.ownerMemberId)}
-											/>
-											{renderLinkPanel(task)}
-										</View>
-									))
-								)}
-							</View>
-						</View>
 					</View>
 
-					{/* Project resources */}
+					{/* Files section */}
+					{fileResources.length > 0 ? (
+						<View style={{ marginTop: 12 }}>
+							<TouchableOpacity onPress={() => setCollapsed((c) => ({ ...c, files: !c.files }))} style={{ marginBottom: 8, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+								<Text style={{ fontWeight: "700" }}>Files ({fileResources.length})</Text>
+								<Text style={{ color: "#6B7280" }}>{collapsed.files ? "▸" : "▾"}</Text>
+							</TouchableOpacity>
+							{!collapsed.files ? (
+								<View style={{ backgroundColor: "#fff", padding: 12, borderRadius: 12 }}>
+									{fileResources.map((r: any) => (
+										<View key={r.id} style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8, paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: "#F3F4F6" }}>
+											<View style={{ flex: 1, marginRight: 8 }}>
+												<Text style={{ fontWeight: "600" }}>{r.label}</Text>
+												<View style={{ flexDirection: "row", alignItems: "center", marginTop: 2, gap: 8 }}>
+													{r.mimeType ? (
+														<View style={{ backgroundColor: "#EFF6FF", paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
+															<Text style={{ fontSize: 10, color: "#2563EB", fontWeight: "600" }}>{r.mimeType.split("/").pop()?.toUpperCase()}</Text>
+														</View>
+													) : null}
+													{r.sizeBytes ? (
+														<Text style={{ fontSize: 11, color: "#6B7280" }}>{formatFileSize(r.sizeBytes)}</Text>
+													) : null}
+												</View>
+											</View>
+											<View style={{ flexDirection: "row", gap: 6 }}>
+												<AppButton title="Open" variant="secondary" onPress={async () => {
+													try {
+														const url = await getSignedFileUrl(r.filePath);
+														Linking.openURL(url);
+													} catch (e) {
+														setToast({ message: "Failed to open file", type: "error" });
+													}
+												}} style={{ paddingVertical: 4, paddingHorizontal: 10 }} />
+												<TouchableOpacity onPress={() => handleDeleteResource(r.id)} style={{ padding: 6, justifyContent: "center" }}>
+													<Text style={{ color: colors.primaryRed, fontSize: 12 }}>Delete</Text>
+												</TouchableOpacity>
+											</View>
+										</View>
+									))}
+								</View>
+							) : null}
+						</View>
+					) : null}
+
+				{/* Project resources (non-file) */}
 					<View style={{ marginTop: 12 }}>
 						<Text style={{ fontWeight: "600", marginBottom: 8 }}>Resources</Text>
-						{(resources ?? []).map((r: any) => (
+						{(resources ?? []).filter((r: any) => r.type !== "file").map((r: any) => (
 							<View key={r.id} style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
 								{r.type === "link" ? (
 									<TouchableOpacity onPress={() => { try { Linking.openURL(r.url); } catch {} }}>
 										<Text style={{ color: colors.primaryBlue }}>{r.label}</Text>
 									</TouchableOpacity>
-								) : r.type === "text" ? (
+								) : (
 									<View style={{ flex: 1 }}>
 										<Text style={{ fontWeight: "700" }}>{r.label}</Text>
 										<Text numberOfLines={2} style={{ color: "#374151" }}>{r.textContent}</Text>
 									</View>
-								) : (
-									<TouchableOpacity onPress={async () => {
-										try {
-											const url = await getSignedFileUrl(r.filePath);
-											Linking.openURL(url);
-										} catch (e) {
-											setToast({ message: "Failed to open file", type: "error" });
-										}
-									}}>
-										<Text style={{ color: colors.primaryBlue }}>{r.label} — {r.filePath?.split("/").pop()}</Text>
-									</TouchableOpacity>
 								)}
 								<TouchableOpacity onPress={() => handleDeleteResource(r.id)} style={{ padding: 6 }}>
 									<Text style={{ color: colors.primaryRed }}>Delete</Text>
@@ -851,84 +970,25 @@ async function saveNotes() {
 						</TouchableOpacity>
 						{!collapsed.deliverables ? (
 							<View style={{ backgroundColor: "#fff", padding: 12, borderRadius: 12 }}>
-								{(deliverables ?? []).length === 0 ? <Text style={{ color: "#6B7280" }}>No deliverables</Text> : deliverables.map((d: any) => (
-									<View key={d.id} style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-										<View style={{ flex: 1 }}>
-											<Text style={{ fontWeight: "700" }}>{d.label}</Text>
-											{d.type === "link" ? (
-												<TouchableOpacity onPress={() => { try { Linking.openURL(d.url); } catch {} }}>
-													<Text style={{ color: colors.primaryBlue }}>{d.url}</Text>
-												</TouchableOpacity>
-											) : d.type === "text" ? (
-												<Text numberOfLines={2} style={{ color: "#374151" }}>{d.textContent ?? ""}</Text>
-											) : (
-												<Text style={{ color: "#6B7280" }}>File (coming soon)</Text>
-											)}
+								{(deliverables ?? []).length === 0 ? (
+									<Text style={{ color: "#6B7280" }}>No deliverables</Text>
+								) : (
+									deliverables.map((d: any) => (
+										<View key={d.id} style={{ flexDirection: "row", alignItems: "flex-start", marginBottom: 12 }}>
+											<View style={{ flex: 1 }}>
+												<Text style={{ fontWeight: "700" }}>{d.title ?? d.label}</Text>
+												{d.url ? (
+													<TouchableOpacity onPress={async () => { try { await Linking.openURL(d.url); } catch (e) { console.error("open deliverable", e); } }}>
+														<Text style={{ color: colors.primaryBlue }}>{d.url}</Text>
+													</TouchableOpacity>
+												) : null}
+											</View>
 										</View>
-										<TouchableOpacity onPress={() => handleDeleteResource(d.id)} style={{ padding: 6 }}>
-											<Text style={{ color: colors.primaryRed }}>Delete</Text>
-										</TouchableOpacity>
-									</View>
-								))}
-
-								{/* Add buttons */}
-								<View style={{ flexDirection: "row", gap: 8, marginTop: 8 }}>
-									<AppButton title="Add link" variant="secondary" onPress={() => { setAddingDeliverableType("link"); setNewDeliverableLabel(""); setNewDeliverableUrl(""); }} />
-									<View style={{ width: 8 }} />
-									<AppButton title="Add note" variant="secondary" onPress={() => { setAddingDeliverableType("text"); setNewDeliverableLabel(""); setNewDeliverableText(""); }} />
+									))
+								)}
+								<View style={{ flexDirection: "row", justifyContent: "flex-end", marginTop: 8 }}>
+									<AppButton title="Add deliverable" variant="primary" onPress={() => setAddDeliverableOpen(true)} />
 								</View>
-
-								{/* Add forms */}
-								{addingDeliverableType === "link" ? (
-									<View style={{ marginTop: 8 }}>
-										<TextInput placeholder="Title" value={newDeliverableLabel} onChangeText={setNewDeliverableLabel} style={{ borderWidth: 1, borderColor: "#ddd", padding: 8, marginBottom: 8 }} />
-										<TextInput placeholder="https://..." value={newDeliverableUrl} onChangeText={setNewDeliverableUrl} style={{ borderWidth: 1, borderColor: "#ddd", padding: 8, marginBottom: 8 }} />
-										<View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-											<AppButton title="Cancel" variant="secondary" onPress={() => setAddingDeliverableType(null)} />
-											<AppButton title="Save" variant="primary" onPress={async () => {
-												if (!id) return;
-												if (!newDeliverableLabel || !newDeliverableUrl) {
-													setToast({ message: "Provide title and URL", type: "error" });
-													return;
-												}
-												try {
-													await addProjectResource(id, { label: newDeliverableLabel, type: "link", url: newDeliverableUrl });
-													setToast({ message: "Deliverable added", type: "success" });
-													setAddingDeliverableType(null);
-													await reload();
-												} catch (e: any) {
-													console.error("add deliverable link failed", e);
-													setToast({ message: `Add failed: ${e?.message ?? String(e)}`, type: "error" });
-												}
-											}} />
-										</View>
-									</View>
-								) : null}
-								{addingDeliverableType === "text" ? (
-									<View style={{ marginTop: 8 }}>
-										<TextInput placeholder="Title" value={newDeliverableLabel} onChangeText={setNewDeliverableLabel} style={{ borderWidth: 1, borderColor: "#ddd", padding: 8, marginBottom: 8 }} />
-										<TextInput placeholder="Note" value={newDeliverableText} onChangeText={setNewDeliverableText} multiline style={{ borderWidth: 1, borderColor: "#ddd", padding: 8, minHeight: 120, marginBottom: 8 }} />
-										<View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-											<AppButton title="Cancel" variant="secondary" onPress={() => setAddingDeliverableType(null)} />
-											<AppButton title="Save" variant="primary" onPress={async () => {
-												if (!id) return;
-												if (!newDeliverableLabel || !newDeliverableText) {
-													setToast({ message: "Provide title and note", type: "error" });
-													return;
-												}
-												try {
-													await addProjectResource(id, { label: newDeliverableLabel, type: "text", text_content: newDeliverableText });
-													setToast({ message: "Deliverable added", type: "success" });
-													setAddingDeliverableType(null);
-													await reload();
-												} catch (e: any) {
-													console.error("add deliverable text failed", e);
-													setToast({ message: `Add failed: ${e?.message ?? String(e)}`, type: "error" });
-												}
-											}} />
-										</View>
-									</View>
-								) : null}
 							</View>
 						) : null}
 					</View>
@@ -967,24 +1027,16 @@ async function saveNotes() {
 							) : (
 								<>
 									<TouchableOpacity onPress={async () => {
-										// try document picker first, fallback to image picker
 										try {
 											const docPicker = await import("expo-document-picker");
 											const res = await docPicker.getDocumentAsync({ type: "*/*" });
-											if (res.type === "success") {
-												setSelectedFile({ uri: res.uri, name: res.name, mime: (res as any).mimeType, size: (res as any).size });
+											const picked = normalizePickedFiles(res);
+											if (picked.length > 0) {
+												const p = picked[0];
+												setSelectedFile({ uri: p.uri ?? "", name: p.name, mime: p.mimeType, size: p.size, file: p.file as any });
 											}
 										} catch (e) {
-											try {
-												const img = await import("expo-image-picker");
-												const r = await img.launchImageLibraryAsync({ mediaTypes: img.MediaTypeOptions.All, quality: 0.8 });
-												if (!r.cancelled) {
-													// @ts-ignore
-													setSelectedFile({ uri: r.uri, name: r.uri.split("/").pop() ?? "photo.jpg", mime: (r as any).type ?? "image/jpeg", size: (r as any).fileSize });
-												}
-											} catch (ee) {
-												setToast({ message: "No picker available", type: "error" });
-											}
+											setToast({ message: "File picker unavailable", type: "error" });
 										}
 									}} style={{ padding: 12, backgroundColor: "#f3f4f6", borderRadius: 8, marginBottom: 8 }}>
 										<Text>{selectedFile ? `Selected: ${selectedFile.name}` : "Pick file"}</Text>
@@ -994,6 +1046,33 @@ async function saveNotes() {
 							<View style={{ flexDirection: "row", justifyContent: "space-between" }}>
 								<AppButton title="Cancel" variant="secondary" onPress={() => setResourceModalOpen(false)} />
 								<AppButton title="Save" variant="primary" onPress={handleAddResource} />
+							</View>
+						</View>
+					) : null}
+					{addDeliverableOpen ? (
+						<View style={{ position: "absolute", left: 16, right: 16, bottom: 80, backgroundColor: "#fff", padding: 12, borderRadius: 12 }}>
+							<Text style={{ fontWeight: "700", marginBottom: 8 }}>Add deliverable</Text>
+							<TextInput
+								placeholder="Title"
+								value={newDeliverableTitle}
+								onChangeText={setNewDeliverableTitle}
+								style={{ borderWidth: 1, borderColor: "#ddd", padding: 8, marginBottom: 8 }}
+							/>
+							<TextInput
+								placeholder="https://..."
+								value={newDeliverableUrl}
+								onChangeText={setNewDeliverableUrl}
+								style={{ borderWidth: 1, borderColor: "#ddd", padding: 8, marginBottom: 8 }}
+							/>
+							<View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+								<AppButton title="Cancel" variant="secondary" onPress={() => setAddDeliverableOpen(false)} />
+								<AppButton
+									title={addingDeliverable ? "Adding..." : "Save"}
+									variant="primary"
+									onPress={handleAddDeliverable}
+									loading={addingDeliverable}
+									disabled={addingDeliverable}
+								/>
 							</View>
 						</View>
 					) : null}
@@ -1023,6 +1102,12 @@ async function saveNotes() {
 			)}
 		</ScrollView>
 	);
+}
+
+function formatFileSize(bytes: number): string {
+	if (bytes < 1024) return `${bytes} B`;
+	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function getMemberLabel(member: any) {

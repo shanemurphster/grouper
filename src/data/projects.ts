@@ -1,6 +1,7 @@
 import { getSupabaseClient } from "../api/supabase";
 import { generatePlanFromText } from "../services/mockPlanner";
 import { Project } from "../models/types";
+import { createTask } from "../lib/tasks/createTask";
 
 function makeJoinCode() {
 	return Math.random().toString(36).slice(2, 8).toUpperCase();
@@ -19,7 +20,7 @@ export async function createProject(input: {
 	resourceLinks?: Array<{ label: string; url: string }>;
 }) {
 	const supabase = getSupabaseClient();
-	const joinCode = makeJoinCode();
+	const joinCode = makeJoinCode().toUpperCase();
 	const now = new Date().toISOString();
 	const insert = {
 		name: input.name,
@@ -83,16 +84,19 @@ export async function createProject(input: {
 		}
 		// insert tasks
 		if ((tasks ?? []).length > 0) {
-			const taskToInsert = tasks.map((t) => ({
-				project_id: project.id,
-				title: t.title,
-				details: t.details,
-				category: t.category,
-				status: t.status,
-				size: t.size,
-				created_at: t.createdAt ?? new Date().toISOString(),
-			}));
-			await supabase.from("tasks").insert(taskToInsert);
+			for (const t of tasks) {
+				await createTask({
+					projectId: project.id,
+					title: t.title,
+					details: t.details,
+					category: t.category,
+					status: t.status,
+					size: t.size,
+					ownerMemberId: null,
+					bundleId: null,
+					isAiGenerated: true,
+				});
+			}
 		}
 	}
 

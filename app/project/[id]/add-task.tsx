@@ -5,11 +5,8 @@ import { Picker } from "@react-native-picker/picker";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { createTaskServer } from "../../../src/data/tasks.server";
 import { autoFillTask } from "../../../src/services/taskAutoFill";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { fetchProjectDetail } from "../../../src/data/projectDetail.server";
 import Toast from "../../../src/components/Toast";
-
-const LOCAL_MEMBER_ID_KEY = "gpai_localMemberId";
 
 export default function AddTaskRoute() {
 	const { id } = useLocalSearchParams() as { id: string };
@@ -17,16 +14,12 @@ export default function AddTaskRoute() {
 	const [title, setTitle] = useState("");
 	const [details, setDetails] = useState("");
 	const [assignee, setAssignee] = useState<string | "unassigned">("unassigned");
-	const [localMemberId, setLocalMemberId] = useState<string | null>(null);
+	const [myMemberId, setMyMemberId] = useState<string | null>(null);
+	const [members, setMembers] = useState<any[]>([]);
 	const [project, setProject] = useState<any>(null);
 	const [toast, setToast] = useState<{ message: string; type?: "info" | "error" | "success" } | null>(null);
 
-	useEffect(() => {
-		AsyncStorage.getItem(LOCAL_MEMBER_ID_KEY).then((v) => setLocalMemberId(v));
-		// fetch project from server when needed could be added
-	}, []);
-
-	// load project members for assignee picker
+	// load project + members for assignee picker
 	useEffect(() => {
 		async function loadProject() {
 			if (!id) return;
@@ -34,12 +27,15 @@ export default function AddTaskRoute() {
 				const detail = await fetchProjectDetail(id);
 				if (detail) {
 					setProject(detail.project ?? detail);
-					// default assignee to "Me" if we have local id
-					const local = await AsyncStorage.getItem(LOCAL_MEMBER_ID_KEY);
-					setAssignee(local ?? "unassigned");
+					setMembers(detail.members ?? []);
+					// myMemberId is the current user's project_members.id
+					const mid = detail.myMemberId ?? null;
+					setMyMemberId(mid);
+					// default assignee to current user's membership
+					setAssignee(mid ?? "unassigned");
 				}
 			} catch (e) {
-				// ignore
+				console.error("add-task: loadProject failed", e);
 			}
 		}
 		loadProject();
@@ -47,33 +43,37 @@ export default function AddTaskRoute() {
 
 	async function save() {
 		if (!id) return;
+		const ownerMemberId = assignee === "unassigned" ? null : assignee;
+
 		const payload: any = {
 			title: title || "Untitled",
 			details: details || undefined,
 			category: "Research",
 			status: "todo",
 			size: "S",
-			ownerMemberId: assignee === "unassigned" ? null : assignee,
+			ownerMemberId,
 			blocked: false,
+			isAiGenerated: false,
 		};
 		const classification = autoFillTask({ title: payload.title, details: payload.details ?? "", projectTimeframe: project?.timeframe ?? "oneWeek" });
 		payload.category = classification.category;
 		payload.size = classification.size;
 		if (classification.dueDate) payload.dueDate = classification.dueDate;
+
+		console.log("add-task: save payload", { projectId: id, ownerMemberId, myMemberId, payload });
+
 		try {
 			const created = await createTaskServer(id, payload);
 			console.log("Created task", created?.id, created);
-			// show success toast briefly before navigating back so user sees feedback
 			setToast({ message: "Saved", type: "success" });
 			setTimeout(() => {
 				setToast(null);
 				router.replace(`/project/${id}`);
 			}, 700);
-			// server will auto-create assignment request when appropriate
-		} catch (e) {
-			console.error("createTaskServer failed", e);
-			setToast({ message: `Failed to save: ${String(e)}`, type: "error" });
-			Alert.alert("Failed to create task", String(e));
+		} catch (e: any) {
+			const msg = e?.message ?? String(e);
+			console.error("createTaskServer failed", msg, e);
+			setToast({ message: `Failed: ${msg}`, type: "error" });
 		}
 	}
 
@@ -88,10 +88,11 @@ export default function AddTaskRoute() {
 				<View style={{ borderWidth: 1, borderColor: "#ddd", borderRadius: 8, overflow: "hidden" }}>
 					<Picker selectedValue={assignee} onValueChange={(v) => setAssignee(v)}>
 						<Picker.Item label="Unassigned" value="unassigned" />
-						{localMemberId ? <Picker.Item label="Me" value={localMemberId} /> : null}
-						{(project?.members ?? []).map((m: any) => (
-							<Picker.Item key={m.id} label={m.displayName ?? m.display_name ?? "Member"} value={m.id} />
-						))}
+						{members.map((m: any) => {
+							const label = (m.displayName ?? m.display_name ?? "").trim() || (m.profile?.full_name ?? "").trim() || "Member";
+							const isMe = m.id === myMemberId;
+							return <Picker.Item key={m.id} label={isMe ? `${label} (me)` : label} value={m.id} />;
+						})}
 					</Picker>
 				</View>
 			</View>

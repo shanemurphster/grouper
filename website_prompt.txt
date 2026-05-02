@@ -1,0 +1,43 @@
+Group Website Project Assignment
+
+Create a simple group website for a course project that displays team members, a project description, and a simple interactive task tracker.
+
+Requirements
+
+Website Pages
+- Home page with the project title, a short description, and links to final deliverables.
+- Team page listing each team member and their role or responsibility.
+- Task tracker that allows members to add and manage tasks. Each task should include:
+  - Title
+  - Assignee
+  - Size (Small / Medium / Large)
+  - Status (e.g., To Do, In Progress, Complete)
+
+Deliverables
+- Export the final project deliverable as a PDF or provide a hosted link.
+- Display a clear link to the deliverable on the website.
+- Include a short README explaining setup, usage, and listing contributors.
+
+Accessibility
+- Use semantic headings throughout the site.
+- Ensure full keyboard navigation support.
+- Maintain readable contrast and basic responsive design.
+
+Grading Rubric
+- Functionality (40%)
+  - Core pages load correctly.
+  - Task tracker works and tasks can be created and updated.
+- Design (20%)
+  - Clear layout.
+  - Responsive and usable on mobile devices.
+- Code Quality (20%)
+  - Modular and well-organized code.
+  - Code is documented and uses version control.
+- Collaboration (20%)
+  - Clear division of labor.
+  - Evidence of teamwork through commits or documentation.
+
+Expected Deliverables
+- Hosted website or static export.
+- Source code repository link.
+- README file with setup instructions and contributor list.

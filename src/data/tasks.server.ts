@@ -1,32 +1,27 @@
 import { supabase, requireUser } from "./supabaseClient";
+import { createTask } from "../lib/tasks/createTask";
 
 export async function createTaskServer(projectId: string, payload: any) {
 	const now = new Date().toISOString();
-	const insert = {
-		project_id: projectId,
-		title: payload.title,
-		details: payload.details ?? null,
-		category: payload.category ?? null,
-		status: payload.status ?? "todo",
-		size: payload.size ?? null,
-		due_date: payload.dueDate ?? null,
-		owner_member_id: payload.ownerMemberId ?? null,
-		blocked: payload.blocked ?? false,
-		blocked_reason: payload.blockedReason ?? null,
-		created_at: now,
-		updated_at: now,
-	};
 	try {
-		console.log("createTaskServer payload", { projectId, insert });
-		const { data, error } = await supabase.from("tasks").insert(insert).select("*").single();
-		if (error) {
-			console.error("createTaskServer error", error);
-			throw error;
-		}
+		console.log("createTaskServer payload", { projectId, payload });
+		const data = await createTask({
+			projectId,
+			title: payload.title,
+			details: payload.details,
+			category: payload.category,
+			status: payload.status,
+			size: payload.size,
+			dueDate: payload.dueDate,
+			ownerMemberId: payload.ownerMemberId,
+			bundleId: payload.bundleId,
+			blocked: payload.blocked,
+			blockedReason: payload.blockedReason,
+			isAiGenerated: payload.isAiGenerated ?? false,
+		});
 		console.log("createTaskServer inserted task", { id: data?.id, projectId, data });
-		// bump project's updated_at to mark recent activity (non-fatal)
 		try {
-			await supabase.from("projects").update({ updated_at: new Date().toISOString() }).eq("id", projectId);
+			await supabase.from("projects").update({ updated_at: now }).eq("id", projectId);
 		} catch (e) {
 			console.error("createTaskServer: failed to bump project updated_at", e);
 		}

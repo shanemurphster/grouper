@@ -1,26 +1,14 @@
 import { getSupabaseClient } from "../api/supabase";
+import { getCurrentMember } from "../lib/projects/getCurrentMember";
 
 const supabase = getSupabaseClient();
 
-async function getMyMemberId(projectId: string) {
-	const { data: userData } = await supabase.auth.getUser();
-	const uid = userData?.user?.id;
-	if (!uid) {
-		throw new Error("Not authenticated");
-	}
-	const { data: member, error } = await supabase
-		.from("project_members")
-		.select("id")
-		.eq("project_id", projectId)
-		.eq("user_id", uid)
-		.maybeSingle();
-	if (error) throw error;
-	if (!member?.id) throw new Error("Project membership not found");
-	return member.id as string;
-}
-
 export async function claimBundle(projectId: string, bundleId: string) {
-	const memberId = await getMyMemberId(projectId);
+	const member = await getCurrentMember(projectId);
+	if (!member?.id) {
+		throw new Error("Project membership not found");
+	}
+	const memberId = member.id;
 	const { data: updatedBundle, error: bundleErr } = await supabase
 		.from("task_bundles")
 		.update({ claimed_by_member_id: memberId, updated_at: new Date().toISOString() })

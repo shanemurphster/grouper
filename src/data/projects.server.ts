@@ -86,6 +86,7 @@ export type ProjectSummary = {
 	assignmentTitle?: string | null;
 	createdAt?: string | null;
 	isArchived?: boolean;
+	plan_status?: string | null;
 };
 
 export async function listMyProjectsServer({ includeArchived = false }: { includeArchived?: boolean } = {}) {
@@ -97,7 +98,7 @@ export async function listMyProjectsServer({ includeArchived = false }: { includ
 	// select from project_members join projects
 	const { data, error } = await supabase
 		.from("project_members")
-		.select("id,project:projects(id,name,timeframe,join_code,assignment_title,created_at,updated_at),is_archived,last_opened_at")
+		.select("id,project:projects(id,name,timeframe,join_code,assignment_title,created_at,updated_at,plan_status),is_archived,last_opened_at")
 		.eq("user_id", uid);
 	if (error) throw error;
 
@@ -117,6 +118,7 @@ export async function listMyProjectsServer({ includeArchived = false }: { includ
 			myMemberId: row.id,
 			lastOpenedAt: row.last_opened_at ?? null,
 			projectUpdatedAt: proj.updated_at ?? proj.created_at ?? null,
+			plan_status: proj.plan_status ?? null,
 		};
 	});
 
@@ -139,6 +141,7 @@ export async function listMyProjectsServer({ includeArchived = false }: { includ
 		assignmentTitle: m.assignmentTitle,
 		createdAt: m.createdAt,
 		isArchived: m.isArchived,
+		plan_status: m.plan_status ?? null,
 	}));
 
 	return includeArchived ? out : out.filter((p) => !p.isArchived);

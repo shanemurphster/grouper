@@ -6,6 +6,7 @@ import { View, ActivityIndicator } from "react-native";
 import { upsertProject, loadProjects } from "../src/storage/repo";
 import AuthGate from "../src/components/AuthGate";
 import { SessionProvider } from "../src/state/sessionStore";
+import { ThemeProvider } from "../src/state/themeStore";
 import AppHeader from "../src/components/AppHeader";
 
 const LOCAL_MEMBER_ID_KEY = "gpai_localMemberId";
@@ -49,6 +50,7 @@ export default function RootLayout() {
 
 	return (
 		<SafeAreaProvider>
+			<ThemeProvider>
 			<SessionProvider>
 				<AuthGate>
 					<Stack screenOptions={{ headerShown: true, header: () => <AppHeader /> }}>
@@ -56,6 +58,7 @@ export default function RootLayout() {
 					</Stack>
 				</AuthGate>
 			</SessionProvider>
+			</ThemeProvider>
 		</SafeAreaProvider>
 	);
 }

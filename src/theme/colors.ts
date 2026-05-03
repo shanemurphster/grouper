@@ -10,6 +10,11 @@ export const colors = {
 	shadow: "#000000",
 	blueLight: "#EEF2FF",
 
+	// Named semantic tokens
+	lightBackground: "#F8FAFC",
+	textPrimary: "#0F172A",
+	textMuted: "#6B7280",
+
 	// Backwards-compatible keys used across the codebase
 	primaryBlue: "#2563EB",
 	primaryRed: "#EF4444",

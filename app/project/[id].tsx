@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, TextInput, Linking, ScrollView, Pressable, useWindowDimensions } from "react-native";
+import { View, Text, FlatList, StyleSheet, TextInput, Linking, ScrollView, useWindowDimensions, Modal, Platform } from "react-native";
 import { Picker } from "@react-native-picker/picker";
 import AppButton from "../../src/components/AppButton";
+import AccessiblePressable from "../../src/components/AccessiblePressable";
 import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import { getProject, upsertProject } from "../../src/storage/repo";
 import { fetchProjectBundleServer } from "../../src/data/projects.server";
@@ -18,7 +19,7 @@ import { retryPlan } from "../../src/data/plan.server";
 import { reassignTaskRpc } from "../../src/lib/supabase/rpcs/reassignTask";
 import { formatTimeframe } from "../../src/utils/formatTimeframe";
 import { normalizePickedFiles } from "../../src/lib/files/normalizePickedFiles";
-import { useTheme } from "../../src/state/themeStore";
+import { useAppTheme, getBundlePalette, type AppTheme } from "../../src/theme/appTheme";
 import { updateDeliverableServer } from "../../src/data/tasks.server";
 
 export default function ProjectDetailRoute() {
@@ -26,12 +27,17 @@ export default function ProjectDetailRoute() {
 	const router = useRouter();
 	const { width } = useWindowDimensions();
 	const isWide = width >= 640;
-	const { darkMode } = useTheme();
-	const bg = darkMode ? "#0F172A" : colors.lightBackground;
-	const cardBg = darkMode ? "#1E293B" : "#fff";
-	const textColor = darkMode ? "#F1F5F9" : colors.textPrimary;
-	const mutedColor = darkMode ? "#94A3B8" : colors.textMuted;
-	const borderColor = darkMode ? "#334155" : "#E5E7EB";
+	const isNarrow = width < 400;
+	const theme = useAppTheme();
+	const {
+		darkMode,
+		bg,
+		card: cardBg,
+		text: textColor,
+		muted: mutedColor,
+		border: borderColor,
+	} = theme;
+	const styles = useMemo(() => createProjectStyles(theme), [darkMode]);
 	const [project, setProject] = useState<any>(null);
 	const [members, setMembers] = useState<any[]>([]);
 	const [tasks, setTasks] = useState<any[]>([]);
@@ -41,7 +47,7 @@ export default function ProjectDetailRoute() {
 	const [plannedMembers, setPlannedMembers] = useState<any[]>([]);
 	const [taskLinks, setTaskLinks] = useState<any[]>([]);
 	const [myMemberId, setMyMemberId] = useState<string | null>(null);
-	const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+	const [collapsed, setCollapsed] = useState<Record<string, boolean>>({ deliverables: true });
 	const [expandedFiles, setExpandedFiles] = useState<Record<string, boolean>>({});
 	const [lastAction, setLastAction] = useState<any | null>(null);
 	const [showSnackbar, setShowSnackbar] = useState(false);
@@ -93,7 +99,148 @@ export default function ProjectDetailRoute() {
 		return map;
 	}, [bundles]);
 	const unclaimedBundles = useMemo(() => (bundles ?? []).filter((bundle) => !bundle?.claimed_by_member_id), [bundles]);
+	const assignmentPreview = project?.assignment_details ?? "";
+	const descriptionText = project?.description ?? assignmentPreview.slice(0, 300);
+	const hasDescription = Boolean(project?.description || assignmentPreview);
+	const renderPeopleSection = (marginTop = 12) => {
+		const visibleMembers = members ?? [];
+		const visiblePlanned = plannedMembers ?? [];
+		if (visibleMembers.length === 0 && visiblePlanned.length === 0) return null;
+		return (
+			<View style={{ marginTop }}>
+				<Text style={{ fontWeight: "700", fontSize: 15, color: textColor, marginBottom: 8 }}>People</Text>
+				<View style={styles.membersRow}>
+					{visibleMembers.map((m) => {
+						const isMe = m.id === resolvedMemberId;
+						return (
+							<View
+								key={m.id}
+								style={[
+									styles.memberPill,
+									isMe ? { borderWidth: 1.5, borderColor: theme.mePillBorder, backgroundColor: theme.mePillBg } : null,
+								]}
+							>
+								<Text style={[styles.memberPillText, isMe ? { color: theme.pennBlue } : null]}>
+									{getMemberLabel(m)}
+									{isMe ? " (You)" : ""}
+								</Text>
+							</View>
+						);
+					})}
+				</View>
+				{visiblePlanned.length > 0 ? (
+					<>
+						<Text style={{ fontWeight: "600", marginTop: 8, marginBottom: 6, color: mutedColor, fontSize: 13 }}>
+							Invited / Planned
+						</Text>
+						<View style={styles.membersRow}>
+							{visiblePlanned.map((m) => (
+								<View key={m.id} style={[styles.memberPill, styles.plannedPill]}>
+									<Text style={[styles.memberPillText, styles.plannedPillText]}>{getMemberLabel(m)}</Text>
+								</View>
+							))}
+						</View>
+					</>
+				) : null}
+			</View>
+		);
+	};
+	const renderDescriptionSection = (marginTop = 12) => {
+		if (!hasDescription) return null;
+		return (
+			<View style={{ marginTop, backgroundColor: cardBg, borderRadius: 12, padding: 14 }}>
+				<Text style={{ fontWeight: "700", color: colors.pennRed, marginBottom: 6, fontSize: 13 }}>Description</Text>
+				<Text style={{ color: mutedColor, lineHeight: 20, fontSize: 13 }} numberOfLines={isWide ? 6 : undefined}>
+					{descriptionText}
+				</Text>
+			</View>
+		);
+	};
+	const renderDeliverablesSection = (marginTop = 16) => (
+		<View style={{ marginTop }}>
+			<AccessiblePressable
+				onPress={() => setCollapsed((c) => ({ ...c, deliverables: !c.deliverables }))}
+				accessibilityLabel={collapsed.deliverables ? "Expand deliverables section" : "Collapse deliverables section"}
+				style={{ marginBottom: 8, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}
+			>
+				<View style={{ flex: 1 }}>
+					<Text style={{ fontWeight: "700", fontSize: 15, color: textColor }}>
+						Deliverables{(deliverables ?? []).length > 0 ? ` (${deliverables.length})` : ""}
+					</Text>
+					<Text style={{ color: mutedColor, fontSize: 12, marginTop: 2 }}>
+						What the group must produce. Add links on each item below.
+					</Text>
+				</View>
+				<Text style={{ color: mutedColor }}>{collapsed.deliverables ? "▸" : "▾"}</Text>
+			</AccessiblePressable>
+			{!collapsed.deliverables ? (
+				<View style={{ backgroundColor: cardBg, padding: 12, borderRadius: 12 }}>
+					{(deliverables ?? []).length === 0 ? (
+						<Text style={{ color: mutedColor }}>No deliverables yet</Text>
+					) : (
+						deliverables.map((d: any) => (
+							<View key={d.id} style={[styles.deliverableItem, { backgroundColor: theme.surface, borderColor }]}>
+								<Text style={[styles.deliverableTitle, { color: textColor }]}>{d.title ?? d.label}</Text>
+								{d.description ? <Text style={[styles.deliverableDescription, { color: mutedColor }]}>{d.description}</Text> : null}
 
+								<View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+									{d.url ? (
+										<AppButton
+											title="Open Link"
+											variant="primary"
+											accessibilityLabel={`Open link for ${d.title ?? d.label}`}
+											onPress={async () => { try { await Linking.openURL(d.url); } catch {} }}
+											style={{ paddingVertical: 5, paddingHorizontal: 12 }}
+										/>
+									) : null}
+									<AppButton
+										title={d.url ? "Edit Link" : "Add Link"}
+										variant="secondary"
+										accessibilityLabel={d.url ? `Edit link for ${d.title ?? d.label}` : `Add link for ${d.title ?? d.label}`}
+										onPress={() => {
+											setDeliverableLinkId(d.id);
+											setDeliverableLinkValue(d.url ?? "");
+										}}
+										style={{ paddingVertical: 5, paddingHorizontal: 12 }}
+									/>
+								</View>
+
+								{deliverableLinkId === d.id ? (
+									<View style={{ marginTop: 8 }}>
+										<TextInput
+											value={deliverableLinkValue}
+											onChangeText={setDeliverableLinkValue}
+											placeholder="https://..."
+											placeholderTextColor={mutedColor}
+											autoCapitalize="none"
+											autoCorrect={false}
+											style={{ borderWidth: 1, borderColor, borderRadius: 8, padding: 8, color: textColor, backgroundColor: cardBg, marginBottom: 8 }}
+										/>
+										<View style={{ flexDirection: "row", gap: 8 }}>
+											<AppButton
+												title="Cancel"
+												variant="secondary"
+												onPress={() => { setDeliverableLinkId(null); setDeliverableLinkValue(""); }}
+											/>
+											<AppButton
+												title={deliverableLinkSaving ? "Saving…" : "Save"}
+												variant="primary"
+												onPress={saveDeliverableLink}
+												disabled={deliverableLinkSaving}
+											/>
+										</View>
+									</View>
+								) : null}
+							</View>
+						))
+					)}
+					<View style={{ flexDirection: "row", justifyContent: "flex-end", marginTop: 8 }}>
+						<AppButton title="Add deliverable" variant="primary" onPress={() => setAddDeliverableOpen(true)} />
+					</View>
+				</View>
+			) : null}
+		</View>
+	);
 	useEffect(() => {
 		reload();
 	}, []);
@@ -105,7 +252,9 @@ export default function ProjectDetailRoute() {
 	}, [sessionMemberId, myMemberId]);
 
 	const resolvedMemberId = myMemberId ?? sessionMemberId ?? null;
-	const remainingTasksCount = (tasks ?? []).filter((t: any) => t.status !== "done").length;
+	const remainingTasksCount = (tasks ?? []).filter(
+		(t: any) => t.status !== "done" && t.status !== "completed"
+	).length;
 	const fileResources = useMemo(() => (resources ?? []).filter((r: any) => r.type === "file"), [resources]);
 
 	useEffect(() => {
@@ -131,7 +280,8 @@ export default function ProjectDetailRoute() {
 				setMyMemberId(detail.myMemberId ?? sessionMemberId ?? null);
 				setBundles(detail.taskBundles ?? []);
 				setTasks(detail.tasks ?? []);
-				setResources(detail.projectResources ?? []);
+				const normalizedResources = detail.projectResources ?? [];
+				setResources(normalizedResources);
 				setPlannedMembers(detail.plannedMembers ?? []);
 				setTaskLinks(detail.taskLinks ?? []);
 				const bundleCount = (detail.taskBundles ?? []).length;
@@ -139,24 +289,27 @@ export default function ProjectDetailRoute() {
 				const planPayloadExists = Boolean(detail.project?.plan_payload);
 				console.info("project detail counts", { project_id: id, planPayloadExists, bundleCount, taskCount });
 				setNormalizationAlert(planPayloadExists && bundleCount === 0 && taskCount === 0);
-				const fromDeliverables = (detail.deliverables ?? []).map((d: any) => ({
-					id: d.id,
-					label: d.title,
-					title: d.title,
-					description: d.description ?? "",
-					type: d.url ? "link" : "text",
-					url: d.url ?? null,
-					textContent: d.description ?? null,
-					isDeliverable: true,
-				}));
-				const fromResources = (detail.projectResources ?? []).filter((r: any) => r.type === "link" || r.type === "text").map((r: any) => ({
-					id: r.id,
-					label: r.label,
-					type: r.type,
-					url: r.url ?? null,
-					textContent: r.text_content ?? null,
-				}));
-				setDeliverables([...fromDeliverables, ...fromResources]);
+				// Deliverables table only — never merge project_resources into this list.
+				const resourceLinkUrls = new Set(
+					normalizedResources
+						.filter((r: any) => r.type === "link" && r.url)
+						.map((r: any) => String(r.url).trim())
+				);
+				setDeliverables(
+					(detail.deliverables ?? [])
+						.filter((d: any) => {
+							const url = String(d.url ?? "").trim();
+							if (!url) return true;
+							return !resourceLinkUrls.has(url);
+						})
+						.map((d: any) => ({
+							id: d.id,
+							label: d.title,
+							title: d.title,
+							description: d.description ?? "",
+							url: d.url ?? null,
+						}))
+				);
 				try {
 					const { markProjectOpened } = await import("../../src/data/projects.server");
 					await markProjectOpened(id);
@@ -345,12 +498,13 @@ export default function ProjectDetailRoute() {
 		if (linkingTaskId !== task.id) return null;
 		return (
 			<View style={styles.inlinePanel}>
-				<Text style={styles.inlineLabel}>Add link</Text>
+				<Text style={[styles.inlineLabel, { color: textColor }]}>Add link</Text>
 				<TextInput
 					value={linkValue}
 					onChangeText={setLinkValue}
 					placeholder="https://..."
-					style={styles.linkInput}
+					placeholderTextColor={mutedColor}
+					style={[styles.linkInput, { borderColor, backgroundColor: theme.inputBg, color: textColor }]}
 					autoCapitalize="none"
 					autoCorrect={false}
 				/>
@@ -509,95 +663,291 @@ export default function ProjectDetailRoute() {
 		}
 	}
 
-	const tasksByMember: Record<string, any[]> = {};
-	(members ?? []).forEach((m) => {
-		tasksByMember[m.id] = (tasks ?? []).filter((t: any) => t.ownerMemberId === m.id);
-		tasksByMember[m.id].sort((a: any, b: any) => new Date(b.updatedAt ?? b.createdAt).getTime() - new Date(a.updatedAt ?? a.createdAt).getTime());
-	});
-
 	const getOwnerLabelForId = (memberId?: string | null) => {
 		if (!memberId) return "Unassigned";
 		const member = membersById[memberId];
 		return member ? getMemberLabel(member) : "Member";
 	};
 
-	const BUNDLE_PALETTE = [
-		{ bg: "#EFF6FF", header: "#BFDBFE", accent: "#2563EB" },
-		{ bg: "#F0FDF4", header: "#BBF7D0", accent: "#16A34A" },
-		{ bg: "#FFF7ED", header: "#FED7AA", accent: "#EA580C" },
-		{ bg: "#FDF4FF", header: "#E9D5FF", accent: "#9333EA" },
-		{ bg: "#FEF2F2", header: "#FECACA", accent: "#DC2626" },
-		{ bg: "#ECFEFF", header: "#A5F3FC", accent: "#0891B2" },
-		{ bg: "#FEFCE8", header: "#FEF08A", accent: "#CA8A04" },
-	];
 	function getBundleColor(index: number) {
-		return BUNDLE_PALETTE[index % BUNDLE_PALETTE.length];
+		return getBundlePalette(index, darkMode);
 	}
 
-	const [joinCopied, setJoinCopied] = useState(false);
-	const joinCopyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const [shareModalOpen, setShareModalOpen] = useState(false);
+	const [shareCopiedKind, setShareCopiedKind] = useState<"code" | "message" | null>(null);
+	const shareCopyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-	async function handleCopyJoinCode(code: string) {
-		if (!code) {
-			setToast({ message: "Join code unavailable", type: "error" });
+	const canNativeShare =
+		Platform.OS === "web" &&
+		typeof navigator !== "undefined" &&
+		typeof navigator.share === "function";
+
+	function getProjectJoinCode() {
+		return String(project?.join_code ?? project?.joinCode ?? "").trim();
+	}
+
+	function buildInviteMessage() {
+		const code = getProjectJoinCode();
+		const name = String(project?.name ?? "Untitled project").trim();
+		return `Join my Grouper project: ${name}. Use code: ${code}`;
+	}
+
+	function clearShareCopiedFeedback() {
+		setShareCopiedKind(null);
+		if (shareCopyTimerRef.current) clearTimeout(shareCopyTimerRef.current);
+	}
+
+	function openShareModal() {
+		clearShareCopiedFeedback();
+		setShareModalOpen(true);
+	}
+
+	function closeShareModal() {
+		clearShareCopiedFeedback();
+		setShareModalOpen(false);
+	}
+
+	async function copyToClipboard(text: string, kind: "code" | "message") {
+		if (!text) {
+			setToast({ message: kind === "code" ? "Join code unavailable" : "Invite message unavailable", type: "error" });
 			return;
 		}
 		try {
 			if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-				await navigator.clipboard.writeText(code);
+				await navigator.clipboard.writeText(text);
 			} else {
 				const clipboard = require("expo-clipboard");
-				await clipboard.setStringAsync(code);
+				await clipboard.setStringAsync(text);
 			}
-			setJoinCopied(true);
-			if (joinCopyTimerRef.current) clearTimeout(joinCopyTimerRef.current);
-			joinCopyTimerRef.current = setTimeout(() => setJoinCopied(false), 1000);
+			setShareCopiedKind(kind);
+			if (shareCopyTimerRef.current) clearTimeout(shareCopyTimerRef.current);
+			shareCopyTimerRef.current = setTimeout(() => setShareCopiedKind(null), 2000);
+			setToast({
+				message: kind === "code" ? "Join code copied!" : "Invite message copied!",
+				type: "success",
+			});
 		} catch (e: any) {
-			console.error("copy join code failed", e);
+			console.error("clipboard copy failed", e);
 			setToast({ message: "Copy failed", type: "error" });
 		}
 	}
 
+	async function handleNativeShare() {
+		const msg = buildInviteMessage();
+		if (!msg || !canNativeShare) {
+			setToast({ message: "Share not available on this device", type: "info" });
+			return;
+		}
+		try {
+			await navigator.share({
+				title: `Join ${project?.name ?? "Grouper project"}`,
+				text: msg,
+			});
+			setToast({ message: "Shared!", type: "success" });
+		} catch (e: any) {
+			if (e?.name === "AbortError") return;
+			console.error("native share failed", e);
+			setToast({ message: "Share failed", type: "error" });
+		}
+	}
+
+	function renderShareModal() {
+		const code = getProjectJoinCode();
+		const inviteMessage = buildInviteMessage();
+		return (
+			<Modal
+				visible={shareModalOpen}
+				transparent
+				animationType="fade"
+				onRequestClose={closeShareModal}
+			>
+				<View style={[styles.shareOverlay, { backgroundColor: theme.overlay }]}>
+					<AccessiblePressable
+						accessibilityLabel="Close share dialog"
+						onPress={closeShareModal}
+						style={StyleSheet.absoluteFillObject}
+					/>
+					<View style={[styles.shareSheet, { backgroundColor: cardBg }]}>
+						<Text style={[styles.shareTitle, { color: textColor }]}>Share project</Text>
+						<Text style={{ color: mutedColor, marginBottom: 14, lineHeight: 20 }}>
+							Invite teammates with your join code.
+						</Text>
+						<Text style={[styles.shareLabel, { color: mutedColor }]}>Join code</Text>
+						<View style={[styles.joinCodePill, styles.shareCodePill, { marginBottom: 12, backgroundColor: theme.joinCodePillBg, borderColor }]}>
+							<Text style={[styles.joinCodeText, { color: theme.joinCodeText }]}>{code || "—"}</Text>
+						</View>
+						<Text style={[styles.shareLabel, { color: mutedColor }]}>Invite message</Text>
+						<Text style={[styles.shareMessagePreview, { color: textColor, borderColor }]} selectable>
+							{inviteMessage}
+						</Text>
+						<View style={styles.shareActions}>
+							<AppButton
+								title={shareCopiedKind === "code" ? "✓ Copied!" : "Copy join code"}
+								variant="secondary"
+								onPress={() => copyToClipboard(code, "code")}
+								disabled={!code}
+							/>
+							<AppButton
+								title={shareCopiedKind === "message" ? "✓ Copied!" : "Copy invite message"}
+								variant="primary"
+								onPress={() => copyToClipboard(inviteMessage, "message")}
+								disabled={!code}
+							/>
+							{canNativeShare ? (
+								<AppButton
+									title="Share…"
+									variant="secondary"
+									onPress={handleNativeShare}
+									disabled={!code}
+									accessibilityLabel="Share with device"
+								/>
+							) : null}
+							<AppButton title="Close" variant="ghost" onPress={closeShareModal} />
+						</View>
+					</View>
+				</View>
+			</Modal>
+		);
+	}
+
+	function renderResourceModal() {
+		return (
+			<Modal visible={resourceModalOpen} transparent animationType="fade" onRequestClose={() => setResourceModalOpen(false)}>
+				<View style={[styles.shareOverlay, { backgroundColor: theme.overlay }]}>
+					<AccessiblePressable
+						accessibilityLabel="Close add resource dialog"
+						onPress={() => setResourceModalOpen(false)}
+						style={StyleSheet.absoluteFillObject}
+					/>
+					<View style={[styles.shareSheet, { backgroundColor: cardBg, maxWidth: 480 }]}>
+						<Text style={{ fontWeight: "700", marginBottom: 8, color: textColor }}>Add resource</Text>
+						<TextInput placeholder="Label" placeholderTextColor={mutedColor} value={newResourceLabel} onChangeText={setNewResourceLabel} style={{ borderWidth: 1, borderColor, padding: 8, marginBottom: 8, color: textColor, backgroundColor: theme.inputBg }} />
+						<View style={{ borderWidth: 1, borderColor, marginBottom: 8 }}>
+							<Picker selectedValue={newResourceType} onValueChange={(v) => setNewResourceType(v as any)}>
+								<Picker.Item label="Link" value="link" />
+								<Picker.Item label="Text" value="text" />
+								<Picker.Item label="File" value="file" />
+							</Picker>
+						</View>
+						{newResourceType === "link" ? (
+							<TextInput placeholder="URL" placeholderTextColor={mutedColor} value={newResourceUrl} onChangeText={setNewResourceUrl} style={{ borderWidth: 1, borderColor, padding: 8, marginBottom: 8, color: textColor, backgroundColor: theme.inputBg }} />
+						) : newResourceType === "text" ? (
+							<TextInput placeholder="Text content" placeholderTextColor={mutedColor} value={newResourceText} onChangeText={setNewResourceText} multiline style={{ borderWidth: 1, borderColor, padding: 8, minHeight: 120, marginBottom: 8, color: textColor, backgroundColor: theme.inputBg }} />
+						) : (
+							<AccessiblePressable
+								accessibilityLabel="Pick file for resource"
+								onPress={async () => {
+									try {
+										const docPicker = await import("expo-document-picker");
+										const res = await docPicker.getDocumentAsync({ type: "*/*" });
+										const picked = normalizePickedFiles(res);
+										if (picked.length > 0) {
+											const p = picked[0];
+											setSelectedFile({ uri: p.uri ?? "", name: p.name, mime: p.mimeType, size: p.size, file: p.file as any });
+										}
+									} catch {
+										setToast({ message: "File picker unavailable", type: "error" });
+									}
+								}}
+								style={{ padding: 12, backgroundColor: theme.surfaceAlt, borderRadius: 8, marginBottom: 8 }}
+							>
+								<Text style={{ color: textColor }}>{selectedFile ? `Selected: ${selectedFile.name}` : "Pick file"}</Text>
+							</AccessiblePressable>
+						)}
+						<View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+							<AppButton title="Cancel" variant="secondary" onPress={() => setResourceModalOpen(false)} />
+							<AppButton title="Save" variant="primary" onPress={handleAddResource} />
+						</View>
+					</View>
+				</View>
+			</Modal>
+		);
+	}
+
+	function renderAddDeliverableModal() {
+		return (
+			<Modal visible={addDeliverableOpen} transparent animationType="fade" onRequestClose={() => setAddDeliverableOpen(false)}>
+				<View style={[styles.shareOverlay, { backgroundColor: theme.overlay }]}>
+					<AccessiblePressable
+						accessibilityLabel="Close add deliverable dialog"
+						onPress={() => setAddDeliverableOpen(false)}
+						style={StyleSheet.absoluteFillObject}
+					/>
+					<View style={[styles.shareSheet, { backgroundColor: cardBg, maxWidth: 480 }]}>
+						<Text style={{ fontWeight: "700", marginBottom: 8, color: textColor }}>Add deliverable</Text>
+						<TextInput
+							placeholder="Title"
+							placeholderTextColor={mutedColor}
+							value={newDeliverableTitle}
+							onChangeText={setNewDeliverableTitle}
+							style={{ borderWidth: 1, borderColor, padding: 8, marginBottom: 8, color: textColor, backgroundColor: theme.inputBg }}
+						/>
+						<TextInput
+							placeholder="https://..."
+							placeholderTextColor={mutedColor}
+							value={newDeliverableUrl}
+							onChangeText={setNewDeliverableUrl}
+							style={{ borderWidth: 1, borderColor, padding: 8, marginBottom: 8, color: textColor, backgroundColor: theme.inputBg }}
+						/>
+						<View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+							<AppButton title="Cancel" variant="secondary" onPress={() => setAddDeliverableOpen(false)} />
+							<AppButton
+								title={addingDeliverable ? "Adding..." : "Save"}
+								variant="primary"
+								onPress={handleAddDeliverable}
+								loading={addingDeliverable}
+								disabled={addingDeliverable}
+							/>
+						</View>
+					</View>
+				</View>
+			</Modal>
+		);
+	}
+
 	return (
+		<>
 		<ScrollView style={[themeStyles.screen, { backgroundColor: bg }]} contentContainerStyle={{ paddingBottom: 120 }}>
 			{project ? (
 				<>
 					{/* Back row */}
 					<View style={{ flexDirection: "row", alignItems: "center", marginBottom: 8 }}>
-						<TouchableOpacity onPress={() => router.push("/projects")}>
+						<AccessiblePressable onPress={() => router.push("/projects")} accessibilityLabel="Back to projects">
 							<Text style={{ color: colors.pennBlue, fontWeight: "600" }}>← Back to Projects</Text>
-						</TouchableOpacity>
+						</AccessiblePressable>
 					</View>
 
-					{/* Project title + meta — two-column on wide */}
-					<View style={[{ marginBottom: 14 }, isWide && { flexDirection: "row", gap: 20, alignItems: "flex-start" }]}>
-						<View style={isWide ? { flex: 1 } : {}}>
-							<Text style={[styles.title, { color: textColor }]}>{project.name}</Text>
-							<View style={{ flexDirection: "row", alignItems: "center", marginTop: 10, flexWrap: "wrap", gap: 8 }}>
-								<View style={styles.pill}>
-									<Text style={styles.pillText}>{formatTimeframe(project.timeframe)}</Text>
-								</View>
-								<Text style={{ color: mutedColor }}>{remainingTasksCount} tasks remaining</Text>
-								{project?.plan_status && project.plan_status !== "ready" ? (
-									<View style={{
-										backgroundColor: project.plan_status === "failed" ? "#FEE2E2" : "#FEF9C3",
-										paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999,
-									}}>
-										<Text style={{ color: project.plan_status === "failed" ? "#991B1B" : "#854D0E", fontSize: 12, fontWeight: "700" }}>
-											{project.plan_status === "pending" ? "Generating plan…" : "Plan failed"}
-										</Text>
-									</View>
-								) : null}
-							</View>
+					<View style={isWide ? { flexDirection: "row", gap: 16, alignItems: "flex-start" } : undefined}>
+						<View style={isWide ? { flex: 1, minWidth: 0 } : undefined}>
+					{/* Project title + meta — People near header */}
+					<View style={{ marginBottom: isWide ? 10 : 14 }}>
+						<View style={[styles.headerTitleRow, isNarrow ? { flexWrap: "wrap" } : null]}>
+							<Text style={[styles.title, { color: textColor, flex: 1, minWidth: isNarrow ? "100%" : 0 }]}>{project.name}</Text>
+							<AppButton
+								title={isNarrow ? "Share" : "Share Project"}
+								variant="secondary"
+								accessibilityLabel="Share project"
+								onPress={openShareModal}
+								style={[styles.headerShareButton, isNarrow ? { alignSelf: "flex-start", marginTop: 4 } : null]}
+							/>
 						</View>
-						{isWide && (project.description || project.assignment_details) ? (
-							<View style={{ flex: 1, backgroundColor: cardBg, borderRadius: 12, padding: 14 }}>
-								<Text style={{ fontWeight: "700", color: colors.pennRed, marginBottom: 6, fontSize: 13 }}>Description</Text>
-								<Text style={{ color: mutedColor, lineHeight: 20, fontSize: 13 }} numberOfLines={4}>
-									{project.description ?? (project.assignment_details ?? "").slice(0, 300)}
-								</Text>
+						<View style={{ flexDirection: "row", alignItems: "center", marginTop: 10, flexWrap: "wrap", gap: 8 }}>
+							<View style={styles.pill}>
+								<Text style={styles.pillText}>{formatTimeframe(project.timeframe)}</Text>
 							</View>
-						) : null}
+							<Text style={{ color: mutedColor }}>{remainingTasksCount} tasks remaining</Text>
+							{project?.plan_status && project.plan_status !== "ready" ? (
+								<View style={{
+									backgroundColor: project.plan_status === "failed" ? theme.planFailedBg : theme.planPendingBg,
+									paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999,
+								}}>
+									<Text style={{ color: project.plan_status === "failed" ? theme.planFailedText : theme.planPendingText, fontSize: 12, fontWeight: "700" }}>
+										{project.plan_status === "pending" ? "Generating plan…" : "Plan failed"}
+									</Text>
+								</View>
+							) : null}
+						</View>
+						{renderPeopleSection(isWide ? 10 : 12)}
 					</View>
 
 					{/* Progress bar */}
@@ -606,17 +956,17 @@ export default function ProjectDetailRoute() {
 						const done = (tasks ?? []).filter((t: any) => t.status === "done" || t.status === "completed").length;
 						const pct = total > 0 ? Math.round((done / total) * 100) : 0;
 						return (
-							<View style={{ marginBottom: 12 }}>
+							<View style={{ marginBottom: isWide ? 8 : 12 }}>
 								{total === 0 ? (
 									<Text style={{ color: mutedColor, fontSize: 13 }}>No tasks yet</Text>
 								) : (
 									<>
 										<View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 4 }}>
 											<Text style={{ fontSize: 13, color: mutedColor }}>{done} of {total} tasks complete</Text>
-											<Text style={{ fontSize: 13, fontWeight: "700", color: pct === 100 ? "#16A34A" : colors.pennBlue }}>{pct}%</Text>
+											<Text style={{ fontSize: 13, fontWeight: "700", color: pct === 100 ? theme.progressDone : theme.pennBlue }}>{pct}%</Text>
 										</View>
-										<View style={{ height: 8, backgroundColor: darkMode ? "#334155" : "#E5E7EB", borderRadius: 999, overflow: "hidden" }}>
-											<View style={{ height: "100%", width: `${pct}%` as any, backgroundColor: pct === 100 ? "#16A34A" : colors.pennBlue, borderRadius: 999 }} />
+										<View style={{ height: 8, backgroundColor: theme.progressTrack, borderRadius: 999, overflow: "hidden" }}>
+											<View style={{ height: "100%", width: `${pct}%` as any, backgroundColor: pct === 100 ? theme.progressDone : theme.pennBlue, borderRadius: 999 }} />
 										</View>
 									</>
 								)}
@@ -624,35 +974,12 @@ export default function ProjectDetailRoute() {
 						);
 					})()}
 
-					{/* Join code / share card */}
-					<View style={[styles.joinCard, { backgroundColor: cardBg }]}>
+					{/* Join code + quick actions */}
+					<View style={[styles.joinCard, { backgroundColor: cardBg, marginBottom: isWide ? 8 : 12 }]}>
 						<View style={styles.joinRow}>
-							<View style={styles.joinCodePill}>
-								<Text style={styles.joinCodeText}>{project.join_code ?? project.joinCode ?? "—"}</Text>
+							<View style={[styles.joinCodePill, { backgroundColor: theme.joinCodePillBg, borderColor }]}>
+								<Text style={[styles.joinCodeText, { color: theme.joinCodeText }]}>{project.join_code ?? project.joinCode ?? "—"}</Text>
 							</View>
-							<AppButton
-								title={joinCopied ? "✓ Copied!" : "Share Project"}
-								variant="primary"
-								onPress={async () => {
-									const code = project.join_code ?? project.joinCode ?? "";
-									const msg = `Join my Grouper project with code: ${code}`;
-									try {
-										if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-											await navigator.clipboard.writeText(msg);
-										} else {
-											const clipboard = require("expo-clipboard");
-											await clipboard.setStringAsync(msg);
-										}
-										setJoinCopied(true);
-										if (joinCopyTimerRef.current) clearTimeout(joinCopyTimerRef.current);
-										joinCopyTimerRef.current = setTimeout(() => setJoinCopied(false), 2000);
-										setToast({ message: "Copied share message!", type: "success" });
-									} catch {
-										setToast({ message: "Copy failed", type: "error" });
-									}
-								}}
-								style={{ marginLeft: 8 }}
-							/>
 							<AppButton
 								title="Add task"
 								variant="secondary"
@@ -662,19 +989,18 @@ export default function ProjectDetailRoute() {
 						</View>
 					</View>
 
-					{/* Assignment + Files — two-column on wide */}
-					<View style={isWide ? { flexDirection: "row", gap: 12, alignItems: "flex-start", marginTop: 12 } : {}}>
-					{/* Assignment (collapsible) */}
-					{(project.assignmentTitle || project.assignment_title || project.assignmentDetails || project.assignment_details || fileResources.length > 0) ? (() => {
+					{/* Assignment (collapsible) — text only; files live in Files section below */}
+					{(() => {
 						const assignText = (project.assignmentDetails ?? project.assignment_details ?? "").trim();
 						const assignTitle = (project.assignmentTitle ?? project.assignment_title ?? "").trim();
+						if (!assignTitle && !assignText) return null;
 						const isExpanded = collapsed.assignment === true;
 						return (
-							<View style={[{ marginTop: isWide ? 0 : 12 }, isWide && { flex: 1 }]}>
-								<TouchableOpacity
+							<View style={{ marginTop: isWide ? 8 : 12 }}>
+								<AccessiblePressable
 									onPress={() => setCollapsed((c) => ({ ...c, assignment: !c.assignment }))}
+									accessibilityLabel={collapsed.assignment ? "Expand assignment section" : "Collapse assignment section"}
 									style={{ backgroundColor: cardBg, padding: 12, borderRadius: 12 }}
-									activeOpacity={0.7}
 								>
 									<View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
 										<Text style={{ fontWeight: "700", color: colors.pennRed, fontSize: 15 }}>Assignment</Text>
@@ -686,11 +1012,6 @@ export default function ProjectDetailRoute() {
 											{assignTitle ? <Text style={{ fontWeight: "600", color: textColor, marginBottom: 2 }} numberOfLines={1}>{assignTitle}</Text> : null}
 											{assignText ? (
 												<Text style={{ color: mutedColor, fontSize: 13, lineHeight: 18 }} numberOfLines={2}>{assignText}</Text>
-											) : fileResources.length > 0 ? (
-												<Text style={{ color: mutedColor, fontSize: 13, fontStyle: "italic" }}>Provided via attached files</Text>
-											) : null}
-											{fileResources.length > 0 ? (
-												<Text style={{ color: mutedColor, fontSize: 12, marginTop: 4 }}>{fileResources.length} file(s) attached</Text>
 											) : null}
 										</View>
 									) : null}
@@ -698,169 +1019,46 @@ export default function ProjectDetailRoute() {
 									{isExpanded ? (
 										<View style={{ marginTop: 8 }}>
 											{assignTitle ? <Text style={{ fontWeight: "700", marginBottom: 6, color: textColor }}>{assignTitle}</Text> : null}
-											{assignText ? (
-												<Text style={{ color: textColor, lineHeight: 20 }}>{assignText}</Text>
-											) : fileResources.length > 0 ? (
-												<Text style={{ color: mutedColor, fontStyle: "italic" }}>Assignment provided via {fileResources.length} attached file(s)</Text>
-											) : (
-												<Text style={{ color: mutedColor }}>No assignment details</Text>
-											)}
-											{fileResources.length > 0 ? (
-												<Text style={{ color: mutedColor, marginTop: 8, fontSize: 12 }}>{fileResources.length} file(s) attached</Text>
-											) : null}
+											{assignText ? <Text style={{ color: textColor, lineHeight: 20 }}>{assignText}</Text> : null}
 										</View>
 									) : null}
-								</TouchableOpacity>
+								</AccessiblePressable>
 							</View>
 						);
-					})() : null}
+					})()}
 
-					{/* People */}
-					<View style={{ marginTop: 16 }}>
-						<Text style={{ fontWeight: "700", fontSize: 15, marginBottom: 8, color: textColor }}>People</Text>
-						<View style={styles.membersRow}>
-							{(members ?? []).map((m) => {
-								const isMe = m.id === resolvedMemberId;
-								return (
-									<View
-										key={m.id}
-										style={[
-											styles.memberPill,
-											isMe ? { borderWidth: 1.5, borderColor: colors.primaryBlue, backgroundColor: "#EFF6FF" } : null,
-										]}
-									>
-										<Text style={[styles.memberPillText, isMe ? { color: colors.primaryBlue } : null]}>
-											{getMemberLabel(m)}{isMe ? " (You)" : ""}
-										</Text>
-									</View>
-								);
-							})}
-						</View>
-						{plannedMembers.length > 0 ? (
-							<>
-								<Text style={{ fontWeight: "600", marginTop: 8, marginBottom: 6, color: "#6B7280", fontSize: 13 }}>Invited / Planned</Text>
-								<View style={styles.membersRow}>
-									{plannedMembers.map((m) => (
-										<View key={m.id} style={[styles.memberPill, styles.plannedPill]}>
-											<Text style={[styles.memberPillText, styles.plannedPillText]}>{getMemberLabel(m)}</Text>
-										</View>
-									))}
-								</View>
-							</>
-						) : null}
-					</View>
+					{renderDescriptionSection(isWide ? 8 : 12)}
 
-					{/* Deliverables */}
-					<View style={{ marginTop: 16 }}>
-						<TouchableOpacity
-							onPress={() => setCollapsed((c) => ({ ...c, deliverables: !c.deliverables }))}
-							style={{ marginBottom: 8, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}
-						>
-							<Text style={{ fontWeight: "700", fontSize: 15, color: textColor }}>
-								Deliverables{(deliverables ?? []).length > 0 ? ` (${deliverables.length})` : ""}
-							</Text>
-							<Text style={{ color: mutedColor }}>{collapsed.deliverables ? "▸" : "▾"}</Text>
-						</TouchableOpacity>
-						{!collapsed.deliverables ? (
-							<View style={{ backgroundColor: cardBg, padding: 12, borderRadius: 12 }}>
-								{(deliverables ?? []).length === 0 ? (
-									<Text style={{ color: mutedColor }}>No deliverables yet</Text>
-								) : (
-									deliverables.map((d: any) => (
-										<View key={d.id} style={[styles.deliverableItem, { backgroundColor: darkMode ? "#0F172A" : "#F9FAFB", borderColor }]}>
-											<Text style={[styles.deliverableTitle, { color: textColor }]}>{d.title ?? d.label}</Text>
-											{d.description ? <Text style={[styles.deliverableDescription, { color: mutedColor }]}>{d.description}</Text> : null}
-
-											{/* Link row */}
-											<View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
-												{d.url ? (
-													<AppButton
-														title="Open Link"
-														variant="primary"
-														onPress={async () => { try { await Linking.openURL(d.url); } catch {} }}
-														style={{ paddingVertical: 5, paddingHorizontal: 12 }}
-													/>
-												) : null}
-												{d.isDeliverable !== false ? (
-													<AppButton
-														title={d.url ? "Edit Link" : "Add Link"}
-														variant="secondary"
-														onPress={() => {
-															setDeliverableLinkId(d.id);
-															setDeliverableLinkValue(d.url ?? "");
-														}}
-														style={{ paddingVertical: 5, paddingHorizontal: 12 }}
-													/>
-												) : null}
-											</View>
-
-											{/* Inline link input */}
-											{deliverableLinkId === d.id ? (
-												<View style={{ marginTop: 8 }}>
-													<TextInput
-														value={deliverableLinkValue}
-														onChangeText={setDeliverableLinkValue}
-														placeholder="https://..."
-														placeholderTextColor={mutedColor}
-														autoCapitalize="none"
-														autoCorrect={false}
-														style={{ borderWidth: 1, borderColor, borderRadius: 8, padding: 8, color: textColor, backgroundColor: cardBg, marginBottom: 8 }}
-													/>
-													<View style={{ flexDirection: "row", gap: 8 }}>
-														<AppButton
-															title="Cancel"
-															variant="secondary"
-															onPress={() => { setDeliverableLinkId(null); setDeliverableLinkValue(""); }}
-														/>
-														<AppButton
-															title={deliverableLinkSaving ? "Saving…" : "Save"}
-															variant="primary"
-															onPress={saveDeliverableLink}
-															disabled={deliverableLinkSaving}
-														/>
-													</View>
-												</View>
-											) : null}
-										</View>
-									))
-								)}
-								<View style={{ flexDirection: "row", justifyContent: "flex-end", marginTop: 8 }}>
-									<AppButton title="Add deliverable" variant="primary" onPress={() => setAddDeliverableOpen(true)} />
-								</View>
-							</View>
-						) : null}
-					</View>
-
-					{/* Files */}
-					<View style={[{ marginTop: isWide ? 0 : 16 }, isWide && { flex: 1 }]}>
-						<TouchableOpacity
+					{/* Files — hidden entirely when there are no file resources */}
+					{fileResources.length > 0 ? (
+					<View style={{ marginTop: isWide ? 8 : 16 }}>
+						<AccessiblePressable
 							onPress={() => setCollapsed((c) => ({ ...c, files: !c.files }))}
+							accessibilityLabel={collapsed.files ? "Expand files section" : "Collapse files section"}
 							style={{ marginBottom: 8, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}
 						>
 							<Text style={{ fontWeight: "700", fontSize: 15, color: textColor }}>
-								Files{fileResources.length > 0 ? ` (${fileResources.length})` : ""}
+								Files ({fileResources.length})
 							</Text>
 							<Text style={{ color: mutedColor }}>{collapsed.files ? "▸" : "▾"}</Text>
-						</TouchableOpacity>
+						</AccessiblePressable>
 						{!collapsed.files ? (
 							<View style={{ backgroundColor: cardBg, padding: 12, borderRadius: 12 }}>
-								{fileResources.length === 0 ? (
-									<Text style={{ color: mutedColor }}>No files uploaded</Text>
-								) : (
-									fileResources.map((r: any) => {
+									{fileResources.map((r: any) => {
 										const isExpanded = expandedFiles[r.id] === true;
 										return (
 											<View key={r.id} style={{ marginBottom: 10, borderBottomWidth: 1, borderBottomColor: borderColor, paddingBottom: 10 }}>
 												<View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-													<TouchableOpacity
+													<AccessiblePressable
 														style={{ flex: 1, marginRight: 8 }}
 														onPress={() => setExpandedFiles((prev) => ({ ...prev, [r.id]: !prev[r.id] }))}
+														accessibilityLabel={isExpanded ? `Collapse file ${r.label}` : `Expand file ${r.label}`}
 													>
 														<Text style={{ fontWeight: "600", color: textColor }}>{r.label}</Text>
 														<View style={{ flexDirection: "row", alignItems: "center", marginTop: 3, gap: 8, flexWrap: "wrap" }}>
 															{r.mimeType ? (
-																<View style={{ backgroundColor: colors.blueLight, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
-																	<Text style={{ fontSize: 10, color: colors.pennBlue, fontWeight: "600" }}>
+																<View style={{ backgroundColor: theme.fileTypeBadgeBg, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
+																	<Text style={{ fontSize: 10, color: theme.badgeBlueText, fontWeight: "600" }}>
 																		{r.mimeType.split("/").pop()?.toUpperCase()}
 																	</Text>
 																</View>
@@ -875,11 +1073,12 @@ export default function ProjectDetailRoute() {
 															) : null}
 															<Text style={{ fontSize: 11, color: mutedColor }}>{isExpanded ? "▾" : "▸"}</Text>
 														</View>
-													</TouchableOpacity>
+													</AccessiblePressable>
 													<View style={{ flexDirection: "row", gap: 6, alignItems: "center" }}>
 														<AppButton
 															title="Open"
 															variant="secondary"
+															accessibilityLabel={`Open file ${r.label}`}
 															onPress={async () => {
 																try {
 																	const url = await getSignedFileUrl(r.filePath);
@@ -890,13 +1089,17 @@ export default function ProjectDetailRoute() {
 															}}
 															style={{ paddingVertical: 4, paddingHorizontal: 10 }}
 														/>
-														<TouchableOpacity onPress={() => handleDeleteResource(r.id)} style={{ padding: 6 }}>
+														<AccessiblePressable
+															onPress={() => handleDeleteResource(r.id)}
+															accessibilityLabel={`Delete file ${r.label}`}
+															style={{ padding: 6 }}
+														>
 															<Text style={{ color: colors.pennRed, fontSize: 12 }}>Delete</Text>
-														</TouchableOpacity>
+														</AccessiblePressable>
 													</View>
 												</View>
 												{isExpanded ? (
-													<View style={{ marginTop: 8, backgroundColor: darkMode ? "#0F172A" : "#F8FAFC", padding: 10, borderRadius: 8 }}>
+													<View style={{ marginTop: 8, backgroundColor: theme.surfaceAlt, padding: 10, borderRadius: 8 }}>
 														{r.textContent ? (
 															<>
 																<Text style={{ fontWeight: "600", marginBottom: 4, color: textColor, fontSize: 12 }}>Extracted text preview</Text>
@@ -909,18 +1112,19 @@ export default function ProjectDetailRoute() {
 												) : null}
 											</View>
 										);
-									})
-								)}
+									})}
 							</View>
 						) : null}
 					</View>
-					</View>{/* end two-column wrapper */}
+					) : null}
+
+					{!isWide ? renderDeliverablesSection(16) : null}
 
 					{/* Plan status alerts */}
 					{project?.plan_status === "failed" ? (
-						<View style={{ marginTop: 14 }}>
+						<View style={{ marginTop: isWide ? 8 : 14 }}>
 							<Text style={{ color: colors.pennRed, fontWeight: "600", marginBottom: 8 }}>Plan generation failed.</Text>
-							{project.plan_error ? <Text style={{ color: "#6B7280", marginBottom: 8 }}>{project.plan_error}</Text> : null}
+							{project.plan_error ? <Text style={{ color: mutedColor, marginBottom: 8 }}>{project.plan_error}</Text> : null}
 							<AppButton
 								title={planRetrying ? "Retrying..." : "Retry plan generation"}
 								variant="primary"
@@ -943,15 +1147,15 @@ export default function ProjectDetailRoute() {
 							/>
 						</View>
 					) : project?.plan_status === "pending" ? (
-						<View style={{ marginTop: 14 }}>
-							<Text style={{ color: "#6B7280", fontWeight: "600" }}>Generating plan…</Text>
+						<View style={{ marginTop: isWide ? 8 : 14 }}>
+							<Text style={{ color: mutedColor, fontWeight: "600" }}>Generating plan…</Text>
 						</View>
 					) : null}
 
 					{normalizationAlert ? (
-						<View style={{ marginTop: 12, backgroundColor: "#fef3c7", padding: 12, borderRadius: 10 }}>
-							<Text style={{ fontWeight: "600", color: "#92400e" }}>Plan exists but tasks not normalized.</Text>
-							<Text style={{ color: "#92400e", marginBottom: 8 }}>Tap to retry normalization.</Text>
+						<View style={{ marginTop: isWide ? 8 : 12, backgroundColor: theme.warnBg, padding: 12, borderRadius: 10 }}>
+							<Text style={{ fontWeight: "600", color: theme.warnText }}>Plan exists but tasks not normalized.</Text>
+							<Text style={{ color: theme.warnText, marginBottom: 8 }}>Tap to retry normalization.</Text>
 							<View style={{ flexDirection: "row" }}>
 								<AppButton
 									title={retryingNormalization ? "Retrying..." : "Retry normalization"}
@@ -966,7 +1170,7 @@ export default function ProjectDetailRoute() {
 
 					{/* Bundles */}
 					{(bundles ?? []).length > 0 ? (
-						<View style={{ marginTop: 20, marginBottom: 12 }}>
+						<View style={{ marginTop: isWide ? 12 : 20, marginBottom: 12 }}>
 							<Text style={{ fontWeight: "700", fontSize: 18, marginBottom: 10, color: textColor }}>Bundles</Text>
 							<View style={styles.bundleList}>
 								{bundles.map((b, idx) => {
@@ -975,19 +1179,20 @@ export default function ProjectDetailRoute() {
 									const palette = getBundleColor(idx);
 									const bundleTitle = getBundleDisplayTitle(b);
 									return (
-										<Pressable key={b.id} style={({ pressed }) => [styles.bundleCard, { backgroundColor: palette.bg, opacity: pressed ? 0.93 : 1 }]}>
+										<View key={b.id} style={[styles.bundleCard, { backgroundColor: palette.bg }]}>
 											<View style={[styles.bundleHeaderStrip, { backgroundColor: palette.header }]}>
 												<View style={styles.bundleHeaderLeft}>
 													{!claimed ? (
-														<Pressable
+														<AccessiblePressable
 															onPress={() => handleClaimBundle(b.id)}
+															accessibilityLabel={`Claim bundle ${bundleTitle}`}
 															style={({ pressed }) => [
 																styles.claimButton,
 																{ backgroundColor: palette.accent, opacity: pressed ? 0.8 : 1 },
 															]}
 														>
 															<Text style={styles.claimButtonText}>Claim</Text>
-														</Pressable>
+														</AccessiblePressable>
 													) : null}
 													<Text style={[styles.bundleTitle, { color: palette.accent }]} numberOfLines={1}>
 														{bundleTitle}
@@ -995,10 +1200,10 @@ export default function ProjectDetailRoute() {
 												</View>
 												<Text style={{ color: palette.accent, fontWeight: "600", fontSize: 13 }}>{b.total_points ?? 0} pts</Text>
 											</View>
-											{b.summary ? <Text style={{ color: "#374151", marginHorizontal: 14, marginBottom: 8 }}>{b.summary}</Text> : null}
+											{b.summary ? <Text style={{ color: palette.summary, marginHorizontal: 14, marginBottom: 8 }}>{b.summary}</Text> : null}
 											<View style={{ paddingHorizontal: 14, paddingBottom: 14 }}>
 												{bTasks.length === 0 ? (
-													<Text style={{ color: "#6B7280" }}>No tasks</Text>
+													<Text style={{ color: palette.empty }}>No tasks</Text>
 												) : (
 													bTasks.map((task: any) => {
 														const taskLinksForTask = (taskLinks ?? []).filter((link: any) => link.task_id === task.id);
@@ -1017,7 +1222,7 @@ export default function ProjectDetailRoute() {
 																{taskLinksForTask.length > 0 ? (
 																	<View style={styles.linksList}>
 																		{taskLinksForTask.map((link: any) => (
-																			<TouchableOpacity
+																			<AccessiblePressable
 																				key={link.id}
 																				onPress={async () => {
 																					try {
@@ -1026,18 +1231,19 @@ export default function ProjectDetailRoute() {
 																						setToast({ message: "Failed to open link", type: "error" });
 																					}
 																				}}
-																				style={styles.linkRow}
+																				accessibilityLabel={`Open link ${link.label}`}
+																				style={[styles.linkRow, { borderColor, backgroundColor: theme.surfaceAlt }]}
 																			>
-																				<Text style={styles.linkLabel}>{link.label}</Text>
+																				<Text style={[styles.linkLabel, { color: textColor }]}>{link.label}</Text>
 																				<Text numberOfLines={1} style={styles.linkUrl}>{link.url}</Text>
-																			</TouchableOpacity>
+																			</AccessiblePressable>
 																		))}
 																	</View>
 																) : null}
 																{reassignTaskId === task.id ? (
 																	<View style={styles.inlinePanel}>
-																		<Text style={styles.inlineLabel}>Reassign task</Text>
-																		<View style={{ borderRadius: 10, borderWidth: 1, borderColor: "#E5E7EB", overflow: "hidden" }}>
+																		<Text style={[styles.inlineLabel, { color: textColor }]}>Reassign task</Text>
+																		<View style={{ borderRadius: 10, borderWidth: 1, borderColor, overflow: "hidden", backgroundColor: theme.inputBg }}>
 																			<Picker
 																				selectedValue={reassignMemberId ?? ""}
 																				onValueChange={(value) => setReassignMemberId(value ? value : null)}
@@ -1070,72 +1276,46 @@ export default function ProjectDetailRoute() {
 													})
 												)}
 											</View>
-										</Pressable>
+										</View>
 									);
 								})}
 							</View>
 						</View>
 					) : null}
 
-					{/* Member task views */}
-					<View style={{ gap: 12 }}>
-						{(members ?? []).map((m) => {
-							const label = getMemberLabel(m);
-							return (
-								<View key={m.id} style={[styles.bubble, { backgroundColor: cardBg }]}>
-									<View style={styles.bubbleHeader}>
-										<View style={styles.avatar}>
-											<Text style={{ color: "#fff", fontWeight: "700" }}>{label.slice(0, 1).toUpperCase()}</Text>
-										</View>
-										<Text style={[styles.memberName, { color: textColor }]}>{label}</Text>
-										<Text style={[styles.memberCount, { color: mutedColor }]}>{(tasksByMember[m.id] ?? []).length}</Text>
-									</View>
-									<View style={styles.bubbleBody}>
-										{(tasksByMember[m.id] ?? []).length === 0 ? (
-											<Text style={{ color: mutedColor }}>No tasks</Text>
-										) : (
-											(tasksByMember[m.id] ?? []).map((task: any) => (
-												<View key={task.id} style={{ marginBottom: 8 }}>
-													<TaskCard
-														task={task}
-														onDone={() => toggleTaskDone(task)}
-														onReassign={() => {}}
-														onAddLink={() => openLinkModal(task)}
-														onDelete={() => deleteTask(task)}
-														ownerLabel={getOwnerLabelForId(task.ownerMemberId)}
-													/>
-													{renderLinkPanel(task)}
-												</View>
-											))
-										)}
-									</View>
-								</View>
-							);
-						})}
-					</View>
-
-					{/* Resources (non-file) */}
-					<View style={{ marginTop: 16 }}>
-						<Text style={{ fontWeight: "700", fontSize: 15, color: textColor, marginBottom: 8 }}>Resources</Text>
+					{/* Resources (non-file) — general links/notes, not assignment deliverables */}
+					<View style={{ marginTop: isWide ? 12 : 16 }}>
+						<Text style={{ fontWeight: "700", fontSize: 15, color: textColor, marginBottom: 4 }}>Resources</Text>
+						<Text style={{ color: mutedColor, fontSize: 12, marginBottom: 8 }}>
+							Shared links and notes for the team. Assignment deliverables are listed separately above.
+						</Text>
 						{(resources ?? []).filter((r: any) => r.type !== "file").length === 0 ? (
 							<Text style={{ color: mutedColor, marginBottom: 8 }}>No resources yet</Text>
 						) : (
 							(resources ?? []).filter((r: any) => r.type !== "file").map((r: any) => (
 								<View key={r.id} style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
 									{r.type === "link" ? (
-										<TouchableOpacity onPress={() => { try { Linking.openURL(r.url); } catch {} }} style={{ flex: 1 }}>
+										<AccessiblePressable
+											onPress={() => { try { Linking.openURL(r.url); } catch {} }}
+											accessibilityLabel={`Open resource ${r.label}`}
+											style={{ flex: 1 }}
+										>
 											<Text style={{ color: colors.pennBlue }}>{r.label}</Text>
 											<Text numberOfLines={1} style={{ color: mutedColor, fontSize: 11 }}>{r.url}</Text>
-										</TouchableOpacity>
+										</AccessiblePressable>
 									) : (
 										<View style={{ flex: 1 }}>
 											<Text style={{ fontWeight: "700", color: textColor }}>{r.label}</Text>
 											<Text numberOfLines={2} style={{ color: mutedColor }}>{r.textContent}</Text>
 										</View>
 									)}
-									<TouchableOpacity onPress={() => handleDeleteResource(r.id)} style={{ padding: 6 }}>
+									<AccessiblePressable
+										onPress={() => handleDeleteResource(r.id)}
+										accessibilityLabel={`Delete resource ${r.label}`}
+										style={{ padding: 6 }}
+									>
 										<Text style={{ color: colors.pennRed, fontSize: 12 }}>Delete</Text>
-									</TouchableOpacity>
+									</AccessiblePressable>
 								</View>
 							))
 						)}
@@ -1182,15 +1362,15 @@ export default function ProjectDetailRoute() {
 					</View>
 
 					{/* Notes */}
-					<View style={{ marginTop: 16 }}>
+					<View style={{ marginTop: isWide ? 12 : 16 }}>
 						<View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
 							<Text style={{ fontWeight: "700", fontSize: 15, color: textColor }}>Notes</Text>
 							{notesSaveStatus === "saving" ? (
 								<Text style={{ color: mutedColor, fontSize: 12 }}>Saving…</Text>
 							) : notesChanged ? (
-								<Text style={{ color: "#CA8A04", fontSize: 12 }}>Unsaved changes</Text>
+								<Text style={{ color: theme.warnText, fontSize: 12 }}>Unsaved changes</Text>
 							) : notesSaveStatus === "saved" ? (
-								<Text style={{ color: "#16A34A", fontSize: 12 }}>Saved</Text>
+								<Text style={{ color: theme.progressDone, fontSize: 12 }}>Saved</Text>
 							) : notesSaveStatus === "error" ? (
 								<Text style={{ color: colors.pennRed, fontSize: 12 }}>Save failed</Text>
 							) : null}
@@ -1203,7 +1383,7 @@ export default function ProjectDetailRoute() {
 							onChangeText={(v) => { setNotes(v); setNotesChanged(true); setNotesSaveStatus("idle"); }}
 							style={{
 								borderWidth: 1,
-								borderColor: notesChanged ? "#CA8A04" : notesSaveStatus === "error" ? colors.pennRed : borderColor,
+								borderColor: notesChanged ? theme.warnText : notesSaveStatus === "error" ? theme.pennRed : borderColor,
 								padding: 10,
 								minHeight: 120,
 								backgroundColor: cardBg,
@@ -1223,77 +1403,13 @@ export default function ProjectDetailRoute() {
 						</View>
 					</View>
 
-					{/* Resource modal */}
-					{resourceModalOpen ? (
-						<View style={{ position: "absolute", left: 16, right: 16, bottom: 80, backgroundColor: "#fff", padding: 12, borderRadius: 12 }}>
-							<Text style={{ fontWeight: "700", marginBottom: 8 }}>Add resource</Text>
-							<TextInput placeholder="Label" value={newResourceLabel} onChangeText={setNewResourceLabel} style={{ borderWidth: 1, borderColor: "#ddd", padding: 8, marginBottom: 8 }} />
-							<View style={{ borderWidth: 1, borderColor: "#ddd", marginBottom: 8 }}>
-								<Picker selectedValue={newResourceType} onValueChange={(v) => setNewResourceType(v as any)}>
-									<Picker.Item label="Link" value="link" />
-									<Picker.Item label="Text" value="text" />
-									<Picker.Item label="File" value="file" />
-								</Picker>
-							</View>
-							{newResourceType === "link" ? (
-								<TextInput placeholder="URL" value={newResourceUrl} onChangeText={setNewResourceUrl} style={{ borderWidth: 1, borderColor: "#ddd", padding: 8, marginBottom: 8 }} />
-							) : newResourceType === "text" ? (
-								<TextInput placeholder="Text content" value={newResourceText} onChangeText={setNewResourceText} multiline style={{ borderWidth: 1, borderColor: "#ddd", padding: 8, minHeight: 120, marginBottom: 8 }} />
-							) : (
-								<TouchableOpacity
-									onPress={async () => {
-										try {
-											const docPicker = await import("expo-document-picker");
-											const res = await docPicker.getDocumentAsync({ type: "*/*" });
-											const picked = normalizePickedFiles(res);
-											if (picked.length > 0) {
-												const p = picked[0];
-												setSelectedFile({ uri: p.uri ?? "", name: p.name, mime: p.mimeType, size: p.size, file: p.file as any });
-											}
-										} catch {
-											setToast({ message: "File picker unavailable", type: "error" });
-										}
-									}}
-									style={{ padding: 12, backgroundColor: "#f3f4f6", borderRadius: 8, marginBottom: 8 }}
-								>
-									<Text>{selectedFile ? `Selected: ${selectedFile.name}` : "Pick file"}</Text>
-								</TouchableOpacity>
-							)}
-							<View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-								<AppButton title="Cancel" variant="secondary" onPress={() => setResourceModalOpen(false)} />
-								<AppButton title="Save" variant="primary" onPress={handleAddResource} />
-							</View>
 						</View>
-					) : null}
-
-					{/* Add deliverable modal */}
-					{addDeliverableOpen ? (
-						<View style={{ position: "absolute", left: 16, right: 16, bottom: 80, backgroundColor: "#fff", padding: 12, borderRadius: 12 }}>
-							<Text style={{ fontWeight: "700", marginBottom: 8 }}>Add deliverable</Text>
-							<TextInput
-								placeholder="Title"
-								value={newDeliverableTitle}
-								onChangeText={setNewDeliverableTitle}
-								style={{ borderWidth: 1, borderColor: "#ddd", padding: 8, marginBottom: 8 }}
-							/>
-							<TextInput
-								placeholder="https://..."
-								value={newDeliverableUrl}
-								onChangeText={setNewDeliverableUrl}
-								style={{ borderWidth: 1, borderColor: "#ddd", padding: 8, marginBottom: 8 }}
-							/>
-							<View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-								<AppButton title="Cancel" variant="secondary" onPress={() => setAddDeliverableOpen(false)} />
-								<AppButton
-									title={addingDeliverable ? "Adding..." : "Save"}
-									variant="primary"
-									onPress={handleAddDeliverable}
-									loading={addingDeliverable}
-									disabled={addingDeliverable}
-								/>
+						{isWide ? (
+							<View style={{ width: 300, maxWidth: 360, flexShrink: 0, alignSelf: "stretch" }}>
+								{renderDeliverablesSection(0)}
 							</View>
-						</View>
-					) : null}
+						) : null}
+					</View>
 
 					{showSnackbar && lastAction ? (
 						<Snackbar
@@ -1312,10 +1428,14 @@ export default function ProjectDetailRoute() {
 					) : null}
 				</>
 			) : (
-				<Text>Loading...</Text>
+				<Text style={{ color: mutedColor }}>Loading...</Text>
 			)}
 			{toast ? <Toast message={toast.message} type={toast.type} /> : null}
 		</ScrollView>
+		{project ? renderShareModal() : null}
+		{project && resourceModalOpen ? renderResourceModal() : null}
+		{project && addDeliverableOpen ? renderAddDeliverableModal() : null}
+		</>
 	);
 }
 
@@ -1339,246 +1459,267 @@ function getMemberLabel(member: any) {
 	return "Member";
 }
 
-const styles = StyleSheet.create({
-	chip: {
-		backgroundColor: "#f1f1f1",
-		padding: 8,
-		borderRadius: 16,
-		marginRight: 8,
-		flexDirection: "row",
-		alignItems: "center",
-	},
-	taskWrap: {
-		backgroundColor: "#fff",
-		padding: 12,
-		borderRadius: 12,
-		marginBottom: 8,
-		shadowColor: "#000",
-		shadowOffset: { width: 0, height: 3 },
-		shadowOpacity: 0.06,
-		shadowRadius: 6,
-		elevation: 2,
-	},
-	smallBtn: {
-		paddingVertical: 6,
-		paddingHorizontal: 10,
-		borderRadius: 8,
-		backgroundColor: "#F3F4F6",
-	},
-	taskRow: {
-		padding: 8,
-		borderBottomWidth: 1,
-		borderBottomColor: "#eee",
-		flexDirection: "row",
-		alignItems: "center",
-	},
-	title: {
-		fontSize: 26,
-		fontWeight: "800",
-		color: "#0F172A",
-	},
-	pill: {
-		backgroundColor: colors.primaryBlue + "22",
-		paddingVertical: 6,
-		paddingHorizontal: 10,
-		borderRadius: 999,
-	},
-	pillText: {
-		color: colors.primaryBlue,
-		fontWeight: "700",
-	},
-	joinCard: {
-		marginBottom: 12,
-		padding: 12,
-		backgroundColor: "#fff",
-		borderRadius: 12,
-	},
-	bubble: {
-		backgroundColor: "#fff",
-		borderRadius: 18,
-		padding: 12,
-		marginBottom: 12,
-		shadowColor: "#000",
-		shadowOffset: { width: 0, height: 3 },
-		shadowOpacity: 0.06,
-		shadowRadius: 6,
-		elevation: 2,
-	},
-	bubbleHeader: {
-		flexDirection: "row",
-		alignItems: "center",
-		marginBottom: 8,
-	},
-	bundleCard: {
-		borderRadius: 16,
-		overflow: "hidden",
-		shadowColor: "#000",
-		shadowOffset: { width: 0, height: 4 },
-		shadowOpacity: 0.08,
-		shadowRadius: 10,
-		elevation: 3,
-	},
-	bundleHeaderStrip: {
-		flexDirection: "row",
-		alignItems: "center",
-		justifyContent: "space-between",
-		paddingVertical: 10,
-		paddingHorizontal: 14,
-		marginBottom: 6,
-	},
-	bundleTitle: {
-		fontWeight: "700",
-		fontSize: 15,
-		flex: 1,
-	},
-	claimButton: {
-		paddingVertical: 4,
-		paddingHorizontal: 12,
-		borderRadius: 999,
-		minHeight: 28,
-		alignSelf: "flex-start",
-		justifyContent: "center",
-		alignItems: "center",
-	},
-	claimButtonText: {
-		color: "#fff",
-		fontWeight: "700",
-		fontSize: 12,
-	},
-	claimedByPill: {
-		paddingHorizontal: 10,
-		paddingVertical: 4,
-		borderRadius: 999,
-		borderWidth: 1,
-	},
-	claimedByText: {
-		fontSize: 12,
-		fontWeight: "600",
-	},
-	membersRow: {
-		flexDirection: "row",
-		flexWrap: "wrap",
-	},
-	memberPill: {
-		backgroundColor: "#F3F4F6",
-		paddingVertical: 4,
-		paddingHorizontal: 10,
-		borderRadius: 999,
-		marginRight: 6,
-		marginBottom: 6,
-	},
-	memberPillText: {
-		fontWeight: "600",
-		color: "#0F172A",
-	},
-	plannedPill: {
-		backgroundColor: "#EEF2FF",
-	},
-	plannedPillText: {
-		color: "#4338CA",
-	},
-	joinRow: {
-		flexDirection: "row",
-		alignItems: "center",
-		flexWrap: "wrap",
-	},
-	bundleList: {
-		gap: 12,
-	},
-	bundleHeaderLeft: {
-		flex: 1,
-		flexDirection: "row",
-		alignItems: "center",
-		gap: 8,
-	},
-	deliverableItem: {
-		backgroundColor: "#F9FAFB",
-		padding: 10,
-		borderRadius: 10,
-		borderWidth: 1,
-		borderColor: "#E5E7EB",
-		marginBottom: 8,
-	},
-	deliverableTitle: {
-		fontWeight: "700",
-	},
-	deliverableDescription: {
-		color: "#4B5563",
-		marginTop: 4,
-	},
-	inlinePanel: {
-		marginTop: 8,
-		padding: 10,
-		borderRadius: 10,
-		backgroundColor: "#fff",
-		borderWidth: 1,
-		borderColor: "#E5E7EB",
-	},
-	inlineLabel: {
-		fontWeight: "600",
-		marginBottom: 6,
-	},
-	inlineControls: {
-		flexDirection: "row",
-		justifyContent: "flex-end",
-		marginTop: 8,
-	},
-	linkInput: {
-		borderWidth: 1,
-		borderColor: "#E5E7EB",
-		borderRadius: 8,
-		padding: 8,
-		backgroundColor: "#fff",
-	},
-	linksList: {
-		marginTop: 6,
-	},
-	linkRow: {
-		borderWidth: 1,
-		borderColor: "#E5E7EB",
-		borderRadius: 10,
-		padding: 8,
-		marginTop: 4,
-	},
-	linkLabel: {
-		fontWeight: "600",
-	},
-	linkUrl: {
-		color: colors.primaryBlue,
-	},
-	joinCodePill: {
-		backgroundColor: "#F3F4F6",
-		paddingVertical: 4,
-		paddingHorizontal: 12,
-		borderRadius: 8,
-		borderWidth: 1,
-		borderColor: "#E5E7EB",
-	},
-	joinCodeText: {
-		fontFamily: "monospace",
-		fontWeight: "700",
-		fontSize: 16,
-		letterSpacing: 2,
-		color: "#0F172A",
-	},
-	avatar: {
-		width: 36,
-		height: 36,
-		borderRadius: 18,
-		backgroundColor: "#6B7280",
-		justifyContent: "center",
-		alignItems: "center",
-		marginRight: 10,
-	},
-	memberName: {
-		fontWeight: "700",
-		flex: 1,
-	},
-	memberCount: {
-		color: "#6B7280",
-		fontWeight: "700",
-	},
-	bubbleBody: {
-		marginTop: 6,
-	},
-});
+function createProjectStyles(theme: AppTheme) {
+	return StyleSheet.create({
+		chip: {
+			backgroundColor: theme.chipBg,
+			padding: 8,
+			borderRadius: 16,
+			marginRight: 8,
+			flexDirection: "row",
+			alignItems: "center",
+		},
+		taskWrap: {
+			backgroundColor: theme.card,
+			padding: 12,
+			borderRadius: 12,
+			marginBottom: 8,
+			shadowColor: theme.shadow,
+			shadowOffset: { width: 0, height: 3 },
+			shadowOpacity: 0.06,
+			shadowRadius: 6,
+			elevation: 2,
+		},
+		smallBtn: {
+			paddingVertical: 6,
+			paddingHorizontal: 10,
+			borderRadius: 8,
+			backgroundColor: theme.memberPill,
+		},
+		taskRow: {
+			padding: 8,
+			borderBottomWidth: 1,
+			borderBottomColor: theme.border,
+			flexDirection: "row",
+			alignItems: "center",
+		},
+		title: {
+			fontSize: 26,
+			fontWeight: "800",
+			color: theme.text,
+		},
+		pill: {
+			backgroundColor: theme.pennBlue + "22",
+			paddingVertical: 6,
+			paddingHorizontal: 10,
+			borderRadius: 999,
+		},
+		pillText: {
+			color: theme.pennBlue,
+			fontWeight: "700",
+		},
+		joinCard: {
+			marginBottom: 12,
+			padding: 12,
+			backgroundColor: theme.card,
+			borderRadius: 12,
+		},
+		bundleCard: {
+			borderRadius: 16,
+			overflow: "hidden",
+			shadowColor: theme.shadow,
+			shadowOffset: { width: 0, height: 4 },
+			shadowOpacity: 0.08,
+			shadowRadius: 10,
+			elevation: 3,
+		},
+		bundleHeaderStrip: {
+			flexDirection: "row",
+			alignItems: "center",
+			justifyContent: "space-between",
+			paddingVertical: 10,
+			paddingHorizontal: 14,
+			marginBottom: 6,
+		},
+		bundleTitle: {
+			fontWeight: "700",
+			fontSize: 15,
+			flex: 1,
+		},
+		claimButton: {
+			paddingVertical: 4,
+			paddingHorizontal: 12,
+			borderRadius: 999,
+			minHeight: 28,
+			alignSelf: "flex-start",
+			justifyContent: "center",
+			alignItems: "center",
+		},
+		claimButtonText: {
+			color: theme.white,
+			fontWeight: "700",
+			fontSize: 12,
+		},
+		claimedByPill: {
+			paddingHorizontal: 10,
+			paddingVertical: 4,
+			borderRadius: 999,
+			borderWidth: 1,
+			borderColor: theme.border,
+		},
+		claimedByText: {
+			fontSize: 12,
+			fontWeight: "600",
+			color: theme.text,
+		},
+		membersRow: {
+			flexDirection: "row",
+			flexWrap: "wrap",
+		},
+		memberPill: {
+			backgroundColor: theme.memberPill,
+			paddingVertical: 4,
+			paddingHorizontal: 10,
+			borderRadius: 999,
+			marginRight: 6,
+			marginBottom: 6,
+		},
+		memberPillText: {
+			fontWeight: "600",
+			color: theme.memberPillText,
+		},
+		plannedPill: {
+			backgroundColor: theme.plannedPillBg,
+		},
+		plannedPillText: {
+			color: theme.plannedPillText,
+		},
+		joinRow: {
+			flexDirection: "row",
+			alignItems: "center",
+			flexWrap: "wrap",
+		},
+		bundleList: {
+			gap: 12,
+		},
+		bundleHeaderLeft: {
+			flex: 1,
+			flexDirection: "row",
+			alignItems: "center",
+			gap: 8,
+		},
+		deliverableItem: {
+			backgroundColor: theme.surface,
+			padding: 10,
+			borderRadius: 10,
+			borderWidth: 1,
+			borderColor: theme.border,
+			marginBottom: 8,
+		},
+		deliverableTitle: {
+			fontWeight: "700",
+		},
+		deliverableDescription: {
+			marginTop: 4,
+		},
+		inlinePanel: {
+			marginTop: 8,
+			padding: 10,
+			borderRadius: 10,
+			backgroundColor: theme.card,
+			borderWidth: 1,
+			borderColor: theme.border,
+		},
+		inlineLabel: {
+			fontWeight: "600",
+			marginBottom: 6,
+		},
+		inlineControls: {
+			flexDirection: "row",
+			justifyContent: "flex-end",
+			marginTop: 8,
+		},
+		linkInput: {
+			borderWidth: 1,
+			borderColor: theme.border,
+			borderRadius: 8,
+			padding: 8,
+			backgroundColor: theme.inputBg,
+		},
+		linksList: {
+			marginTop: 6,
+		},
+		linkRow: {
+			borderWidth: 1,
+			borderColor: theme.border,
+			borderRadius: 10,
+			padding: 8,
+			marginTop: 4,
+		},
+		linkLabel: {
+			fontWeight: "600",
+		},
+		linkUrl: {
+			color: theme.pennBlue,
+		},
+		joinCodePill: {
+			backgroundColor: theme.joinCodePillBg,
+			paddingVertical: 4,
+			paddingHorizontal: 12,
+			borderRadius: 8,
+			borderWidth: 1,
+			borderColor: theme.border,
+		},
+		joinCodeText: {
+			fontFamily: "monospace",
+			fontWeight: "700",
+			fontSize: 16,
+			letterSpacing: 2,
+			color: theme.joinCodeText,
+		},
+		headerTitleRow: {
+			flexDirection: "row",
+			alignItems: "flex-start",
+			gap: 8,
+		},
+		headerShareButton: {
+			flexShrink: 0,
+			marginTop: 2,
+		},
+		shareOverlay: {
+			flex: 1,
+			justifyContent: "center",
+			padding: 20,
+			position: "relative",
+		},
+		shareSheet: {
+			borderRadius: 16,
+			padding: 20,
+			maxWidth: 440,
+			width: "100%",
+			alignSelf: "center",
+			zIndex: 1,
+			shadowColor: theme.shadow,
+			shadowOffset: { width: 0, height: 8 },
+			shadowOpacity: 0.14,
+			shadowRadius: 20,
+			elevation: 10,
+		},
+		shareTitle: {
+			fontWeight: "800",
+			fontSize: 18,
+			marginBottom: 6,
+		},
+		shareLabel: {
+			fontSize: 12,
+			fontWeight: "700",
+			textTransform: "uppercase",
+			letterSpacing: 0.6,
+			marginBottom: 6,
+		},
+		shareCodePill: {
+			alignSelf: "flex-start",
+		},
+		shareMessagePreview: {
+			borderWidth: 1,
+			borderRadius: 10,
+			padding: 10,
+			marginBottom: 16,
+			lineHeight: 20,
+			fontSize: 14,
+		},
+		shareActions: {
+			gap: 10,
+		},
+	});
+}

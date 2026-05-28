@@ -1,7 +1,9 @@
 import React from "react";
-import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
+import { View, Text, StyleSheet } from "react-native";
 import CategoryChip from "./CategoryChip";
+import AccessiblePressable from "./AccessiblePressable";
 import { colors } from "../theme/colors";
+import { useAppTheme } from "../theme/appTheme";
 
 type Props = {
 	task: any;
@@ -25,24 +27,31 @@ export default function TaskCard({
 	bundleAccent,
 	ownerLabel,
 }: Props) {
+	const theme = useAppTheme();
 	const accentStyle = bundleAccent ? { borderColor: bundleAccent, borderWidth: 1 } : null;
+	const isDone = task.status === "done";
+	const cardBackground = bundleColor ?? theme.card;
 	return (
-		<View style={[styles.card, bundleColor ? { backgroundColor: bundleColor } : null, accentStyle]}>
+		<View style={[styles.card, { backgroundColor: cardBackground, shadowColor: theme.shadow }, accentStyle]}>
 			<View style={{ flexDirection: "row", alignItems: "center" }}>
-				<TouchableOpacity onPress={onDone} style={styles.checkbox} accessibilityLabel="Toggle done">
-					<Text style={{ fontSize: 18 }}>{task.status === "done" ? "☑" : "☐"}</Text>
-				</TouchableOpacity>
+				<AccessiblePressable
+					onPress={onDone}
+					style={styles.checkbox}
+					accessibilityLabel={isDone ? "Mark task incomplete" : "Mark task done"}
+				>
+					<Text style={{ fontSize: 18 }}>{isDone ? "☑" : "☐"}</Text>
+				</AccessiblePressable>
 				<View style={{ flex: 1, marginLeft: 12 }}>
-					<Text style={[styles.title, task.status === "done" ? styles.titleDone : null]} numberOfLines={1}>
+					<Text style={[styles.title, { color: theme.text }, isDone ? styles.titleDone : null]} numberOfLines={1}>
 						{task.title}
 					</Text>
 					<View style={styles.metaRow}>
 						<CategoryChip category={task.category ?? "Research"} />
-						<Text style={styles.metaText}>
+						<Text style={[styles.metaText, { color: theme.muted }]}>
 							{task.size ? task.size : "Size?"} · {task.status}
 						</Text>
 					</View>
-					{task.details ? <Text style={styles.details}>{task.details}</Text> : null}
+					{task.details ? <Text style={[styles.details, { color: theme.muted }]}>{task.details}</Text> : null}
 					{task.url ? <Text style={styles.linkText}>{task.url}</Text> : null}
 				</View>
 				<View style={{ alignItems: "flex-end" }}>
@@ -61,35 +70,37 @@ export default function TaskCard({
 						{ownerLabel ?? (task.ownerMemberId ? "Member" : "Unassigned")}
 					</Text>
 					<View style={{ flexDirection: "row", marginTop: 8 }}>
-						<TouchableOpacity onPress={onReassign} style={[styles.actionBtn, { marginLeft: 8 }]}>
-							<Text style={styles.actionText}>Reassign</Text>
-						</TouchableOpacity>
+						<AccessiblePressable
+							onPress={onReassign}
+							style={[styles.actionBtn, { marginLeft: 8, backgroundColor: theme.badgeBlueBg }]}
+							accessibilityLabel={`Reassign task ${task.title}`}
+						>
+							<Text style={[styles.actionText, { color: theme.pennBlue }]}>Reassign</Text>
+						</AccessiblePressable>
 						{task.blocked ? (
-							<TouchableOpacity
-								onPress={() => {}}
-								style={[styles.actionBtn, { marginLeft: 8, backgroundColor: "#FEF3C7" }]}
-							>
-								<Text style={{ color: "#B45309", fontWeight: "700" }}>Blocked</Text>
-							</TouchableOpacity>
+							<View style={[styles.actionBtn, { marginLeft: 8, backgroundColor: theme.warnBg }]}>
+								<Text style={{ color: theme.warnText, fontWeight: "700" }}>Blocked</Text>
+							</View>
 						) : null}
-						<TouchableOpacity onPress={onAddLink} style={[styles.actionBtn, { marginLeft: 8, backgroundColor: colors.blueLight }]}>
-							<Text style={{ color: colors.pennBlue, fontWeight: "700" }}>Link</Text>
-						</TouchableOpacity>
-						<TouchableOpacity onPress={onDelete} style={[styles.actionBtn, { marginLeft: 8, backgroundColor: "#FEE2E2" }]}>
+						<AccessiblePressable
+							onPress={onAddLink}
+							style={[styles.actionBtn, { marginLeft: 8, backgroundColor: theme.badgeBlueBg }]}
+							accessibilityLabel={`Add link to task ${task.title}`}
+						>
+							<Text style={{ color: theme.pennBlue, fontWeight: "700" }}>Link</Text>
+						</AccessiblePressable>
+						<AccessiblePressable
+							onPress={onDelete}
+							style={[styles.actionBtn, { marginLeft: 8, backgroundColor: theme.planFailedBg }]}
+							accessibilityLabel={`Delete task ${task.title}`}
+						>
 							<Text style={{ color: colors.pennRed, fontWeight: "700" }}>Delete</Text>
-						</TouchableOpacity>
+						</AccessiblePressable>
 					</View>
 				</View>
 			</View>
 		</View>
 	);
-}
-
-function prettyStatus(s: string) {
-	if (s === "todo") return "To-Do";
-	if (s === "doing") return "Doing";
-	if (s === "done") return "Done";
-	return s;
 }
 
 function getColorForMember(id: string) {
@@ -160,4 +171,3 @@ const styles = StyleSheet.create({
 		opacity: 0.6,
 	},
 });
-

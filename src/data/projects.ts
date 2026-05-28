@@ -61,11 +61,12 @@ export async function createProject(input: {
 	if ((input.resourceLinks ?? []).length > 0) {
 		const links = (input.resourceLinks ?? []).map((r) => ({
 			project_id: project.id,
-			title: r.label || r.url,
+			label: r.label || r.url,
+			type: "link",
 			url: r.url || null,
 			created_at: new Date().toISOString(),
 		}));
-		await supabase.from("deliverables").insert(links);
+		await supabase.from("project_resources").insert(links);
 	}
 
 	// optionally generate starter tasks/deliverables client-side and insert

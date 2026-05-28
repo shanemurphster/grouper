@@ -1,17 +1,19 @@
 import React from "react";
 import { View, Text, StyleSheet } from "react-native";
 import { colors } from "../theme/colors";
+import { useAppTheme } from "../theme/appTheme";
 
 type Props = {
 	category: keyof typeof colors.category;
 };
 
 export default function CategoryChip({ category }: Props) {
+	const theme = useAppTheme();
 	const bg = colors.category[category as any] ?? "#DDD";
 	return (
 		<View style={[styles.chip, { backgroundColor: bg + "22" }]}>
 			<View style={[styles.dot, { backgroundColor: bg }]} />
-			<Text style={styles.text}>{category}</Text>
+			<Text style={[styles.text, { color: theme.text }]}>{category}</Text>
 		</View>
 	);
 }

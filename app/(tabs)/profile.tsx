@@ -7,6 +7,7 @@ import { getSession, signOut } from "../../src/api/supabase";
 import { getProfile, upsertProfile, uploadAvatar, getSignedAvatarUrl } from "../../src/data/profile.server";
 import Toast from "../../src/components/Toast";
 import { useTheme } from "../../src/state/themeStore";
+import { useAppTheme } from "../../src/theme/appTheme";
 
 export default function ProfileRoute() {
 	const [email, setEmail] = useState<string | null>(null);
@@ -18,12 +19,8 @@ export default function ProfileRoute() {
 	const [avatarPath, setAvatarPath] = useState<string | null>(null);
 	const [toast, setToast] = useState<{ message: string; type?: "info" | "error" | "success" } | null>(null);
 	const { darkMode, toggleDarkMode } = useTheme();
-
-	const bg = darkMode ? "#0F172A" : colors.lightBackground;
-	const cardBg = darkMode ? "#1E293B" : "#fff";
-	const textColor = darkMode ? "#F1F5F9" : colors.textPrimary;
-	const mutedColor = darkMode ? "#94A3B8" : colors.textMuted;
-	const borderColor = darkMode ? "#334155" : "#E5E7EB";
+	const theme = useAppTheme();
+	const { bg, card: cardBg, text: textColor, muted: mutedColor, border: borderColor } = theme;
 
 	useEffect(() => {
 		let mounted = true;

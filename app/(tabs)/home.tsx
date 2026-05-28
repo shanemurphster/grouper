@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, ScrollView, TouchableOpacity, TextInput, useWindowDimensions } from "react-native";
+import { View, Text, ScrollView, TextInput, useWindowDimensions, Modal, StyleSheet } from "react-native";
+import AccessiblePressable from "../../src/components/AccessiblePressable";
 import AppButton from "../../src/components/AppButton";
 import { useRouter } from "expo-router";
 import { signOut } from "../../src/api/supabase";
@@ -9,21 +10,9 @@ import { loadProjects } from "../../src/data/projects.local";
 import { colors } from "../../src/theme/colors";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useSession } from "../../src/state/sessionStore";
-import { useTheme } from "../../src/state/themeStore";
+import { useAppTheme, getPlanStatusBadge, getTaskStatusBadge } from "../../src/theme/appTheme";
 import Toast from "../../src/components/Toast";
 import { updateTaskServer } from "../../src/data/tasks.server";
-
-const PLAN_STATUS_STYLE: Record<string, { bg: string; text: string; label: string }> = {
-	ready:   { bg: "#D1FAE5", text: "#065F46", label: "Plan ready" },
-	pending: { bg: "#FEF9C3", text: "#854D0E", label: "Generating…" },
-	failed:  { bg: "#FEE2E2", text: "#991B1B", label: "Plan failed" },
-};
-
-const TASK_STATUS_STYLE: Record<string, { bg: string; text: string; label: string }> = {
-	todo:  { bg: "#F3F4F6", text: "#374151", label: "To Do" },
-	doing: { bg: "#EFF6FF", text: "#1D4ED8", label: "In Progress" },
-	done:  { bg: "#D1FAE5", text: "#065F46", label: "Done" },
-};
 
 const TASKS_DEFAULT_LIMIT = 5;
 
@@ -32,7 +21,8 @@ export default function HomeRoute() {
 	const { width } = useWindowDimensions();
 	const isWide = width >= 640;
 	const session = useSession();
-	const { darkMode } = useTheme();
+	const theme = useAppTheme();
+	const { darkMode, bg, card: cardBg, text: textColor, muted: mutedColor, border: borderColor, shadow: shadowColor } = theme;
 
 	const [projects, setProjects] = useState<any[]>([]);
 	const [tasks, setTasks] = useState<any[]>([]);
@@ -44,12 +34,6 @@ export default function HomeRoute() {
 	const [joinLoading, setJoinLoading] = useState(false);
 	const [tasksExpanded, setTasksExpanded] = useState(false);
 	const [toast, setToast] = useState<{ message: string; type?: "info" | "error" | "success" } | null>(null);
-
-	const bg = darkMode ? "#0F172A" : colors.lightBackground;
-	const cardBg = darkMode ? "#1E293B" : "#fff";
-	const textColor = darkMode ? "#F1F5F9" : colors.textPrimary;
-	const mutedColor = darkMode ? "#94A3B8" : colors.textMuted;
-	const borderColor = darkMode ? "#334155" : "#E5E7EB";
 
 	useEffect(() => {
 		reload();
@@ -107,6 +91,7 @@ export default function HomeRoute() {
 	const visibleTasks = tasksExpanded ? tasks : tasks.slice(0, TASKS_DEFAULT_LIMIT);
 
 	return (
+		<>
 		<ScrollView style={{ flex: 1, backgroundColor: bg }} contentContainerStyle={{ paddingBottom: 40 }}>
 			{/* Header */}
 			<View style={{ backgroundColor: colors.pennBlue, paddingTop: 20, paddingBottom: 24, paddingHorizontal: 20 }}>
@@ -116,22 +101,24 @@ export default function HomeRoute() {
 
 			{/* Quick Actions */}
 			<View style={{ flexDirection: "row", gap: 10, paddingHorizontal: 16, paddingTop: 16, paddingBottom: 4 }}>
-				<TouchableOpacity
+				<AccessiblePressable
 					onPress={() => router.push("/projects/create")}
+					accessibilityLabel="Create project"
 					style={{ flex: 1, backgroundColor: colors.pennBlue, paddingVertical: 12, borderRadius: 12, alignItems: "center" }}
 				>
 					<Text style={{ color: "#fff", fontWeight: "700", fontSize: 14 }}>+ Create Project</Text>
-				</TouchableOpacity>
-				<TouchableOpacity
+				</AccessiblePressable>
+				<AccessiblePressable
 					onPress={() => {
 						const def = session?.profile?.full_name ?? (session?.session?.user?.email?.split("@")[0] ?? "Me");
 						setJoinDisplayName(def ?? "");
 						setJoinModalOpen(true);
 					}}
+					accessibilityLabel="Join project"
 					style={{ flex: 1, backgroundColor: cardBg, paddingVertical: 12, borderRadius: 12, alignItems: "center", borderWidth: 1.5, borderColor: colors.pennBlue }}
 				>
 					<Text style={{ color: colors.pennBlue, fontWeight: "700", fontSize: 14 }}>Join Project</Text>
-				</TouchableOpacity>
+				</AccessiblePressable>
 			</View>
 
 			{/* Your Tasks */}
@@ -144,7 +131,7 @@ export default function HomeRoute() {
 				) : (
 					<View style={{ gap: 8 }}>
 						{visibleTasks.map((t: any) => {
-							const statusStyle = TASK_STATUS_STYLE[t.status ?? "todo"] ?? TASK_STATUS_STYLE.todo;
+							const statusStyle = getTaskStatusBadge(t.status ?? "todo", darkMode)!;
 							const isDone = t.status === "done";
 							return (
 								<View
@@ -157,7 +144,7 @@ export default function HomeRoute() {
 										paddingLeft: 4,
 										flexDirection: "row",
 										alignItems: "center",
-										shadowColor: "#000",
+										shadowColor: shadowColor,
 										shadowOffset: { width: 0, height: 1 },
 										shadowOpacity: 0.04,
 										shadowRadius: 4,
@@ -165,10 +152,10 @@ export default function HomeRoute() {
 									}}
 								>
 									{/* Checkbox — does NOT navigate */}
-									<TouchableOpacity
+									<AccessiblePressable
 										onPress={() => toggleTaskDone(t)}
 										style={{ width: 44, alignItems: "center", justifyContent: "center" }}
-										accessibilityLabel={isDone ? "Mark incomplete" : "Mark done"}
+										accessibilityLabel={isDone ? "Mark task incomplete" : "Mark task done"}
 									>
 										<View style={{
 											width: 22,
@@ -182,12 +169,12 @@ export default function HomeRoute() {
 										}}>
 											{isDone ? <Text style={{ color: "#fff", fontSize: 13, fontWeight: "800" }}>✓</Text> : null}
 										</View>
-									</TouchableOpacity>
+									</AccessiblePressable>
 
 									{/* Card body — navigates to project */}
-									<TouchableOpacity
+									<AccessiblePressable
 										onPress={() => router.push(`/project/${t.projectId ?? t.project_id}`)}
-										activeOpacity={0.85}
+										accessibilityLabel={`Open project for task ${t.title}`}
 										style={{ flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}
 									>
 										<View style={{ flex: 1, marginRight: 10 }}>
@@ -202,21 +189,22 @@ export default function HomeRoute() {
 										<View style={{ backgroundColor: statusStyle.bg, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 }}>
 											<Text style={{ color: statusStyle.text, fontSize: 11, fontWeight: "600" }}>{statusStyle.label}</Text>
 										</View>
-									</TouchableOpacity>
+									</AccessiblePressable>
 								</View>
 							);
 						})}
 
 						{/* Show more / show less */}
 						{tasks.length > TASKS_DEFAULT_LIMIT ? (
-							<TouchableOpacity
+							<AccessiblePressable
 								onPress={() => setTasksExpanded((v) => !v)}
+								accessibilityLabel={tasksExpanded ? "Show fewer tasks" : "Show more tasks"}
 								style={{ alignItems: "center", paddingVertical: 8 }}
 							>
 								<Text style={{ color: colors.pennBlue, fontWeight: "600", fontSize: 13 }}>
 									{tasksExpanded ? "Show less" : `Show ${tasks.length - TASKS_DEFAULT_LIMIT} more`}
 								</Text>
-							</TouchableOpacity>
+							</AccessiblePressable>
 						) : null}
 					</View>
 				)}
@@ -233,19 +221,19 @@ export default function HomeRoute() {
 					<View style={isWide ? { flexDirection: "row", flexWrap: "wrap", gap: 10 } : { gap: 10 }}>
 						{projects.map((p) => {
 							const myTaskCount = taskCountByProject[p.id] ?? 0;
-							const statusStyle = PLAN_STATUS_STYLE[(p as any).plan_status ?? ""] ?? null;
+							const statusStyle = getPlanStatusBadge((p as any).plan_status ?? "", darkMode);
 							return (
-								<TouchableOpacity
+								<AccessiblePressable
 									key={p.id}
 									onPress={() => router.push(`/project/${p.id}`)}
-									activeOpacity={0.85}
+									accessibilityLabel={`Open project ${p.name}`}
 									style={{
 										backgroundColor: cardBg,
 										borderRadius: 14,
 										padding: 16,
 										borderLeftWidth: 4,
 										borderLeftColor: colors.pennBlue,
-										shadowColor: "#000",
+										shadowColor: shadowColor,
 										shadowOffset: { width: 0, height: 2 },
 										shadowOpacity: 0.05,
 										shadowRadius: 6,
@@ -261,14 +249,14 @@ export default function HomeRoute() {
 											</View>
 										) : null}
 										{myTaskCount > 0 ? (
-											<View style={{ backgroundColor: "#EFF6FF", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999 }}>
-												<Text style={{ color: colors.pennBlue, fontSize: 11, fontWeight: "700" }}>
+											<View style={{ backgroundColor: theme.badgeBlueBg, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999 }}>
+												<Text style={{ color: theme.badgeBlueText, fontSize: 11, fontWeight: "700" }}>
 													{myTaskCount} task{myTaskCount !== 1 ? "s" : ""} assigned
 												</Text>
 											</View>
 										) : null}
 									</View>
-								</TouchableOpacity>
+								</AccessiblePressable>
 							);
 						})}
 					</View>
@@ -280,56 +268,73 @@ export default function HomeRoute() {
 				<AppButton title="Sign out" onPress={() => signOut()} variant="ghost" />
 			</View>
 
-			{/* Join modal */}
-			{joinModalOpen ? (
-				<View style={{
-					position: "absolute", left: 16, right: 16, top: 100,
-					backgroundColor: cardBg, padding: 20, borderRadius: 16,
-					shadowColor: "#000", shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.14, shadowRadius: 20, elevation: 10,
-				}}>
-					<Text style={{ fontWeight: "700", fontSize: 16, marginBottom: 14, color: textColor }}>Join a Project</Text>
-					<TextInput
-						placeholder="Join code"
-						placeholderTextColor={mutedColor}
-						value={joinCode}
-						onChangeText={setJoinCode}
-						autoCapitalize="characters"
-						style={{ borderWidth: 1, borderColor, borderRadius: 8, padding: 10, marginBottom: 10, letterSpacing: 2, color: textColor, backgroundColor: cardBg }}
-					/>
-					<TextInput
-						placeholder="Your display name"
-						placeholderTextColor={mutedColor}
-						value={joinDisplayName}
-						onChangeText={setJoinDisplayName}
-						style={{ borderWidth: 1, borderColor, borderRadius: 8, padding: 10, marginBottom: 14, color: textColor, backgroundColor: cardBg }}
-					/>
-					<View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-						<AppButton title="Cancel" onPress={() => setJoinModalOpen(false)} variant="secondary" />
-						<AppButton
-							title="Join"
-							onPress={async () => {
-								setJoinLoading(true);
-								try {
-									const projId = await joinProjectServer({ joinCode: joinCode.trim(), displayName: joinDisplayName.trim() });
-									setToast({ message: "Joined project!", type: "success" });
-									setJoinModalOpen(false);
-									setJoinCode("");
-									await reload();
-									router.push(`/project/${projId}`);
-								} catch (e: any) {
-									setToast({ message: `Join failed: ${e?.message ?? String(e)}`, type: "error" });
-								} finally {
-									setJoinLoading(false);
-								}
-							}}
-							variant="primary"
-							loading={joinLoading}
-						/>
-					</View>
-				</View>
-			) : null}
-
 			{toast ? <Toast message={toast.message} type={toast.type} /> : null}
 		</ScrollView>
+
+			{/* Join modal */}
+			<Modal visible={joinModalOpen} transparent animationType="fade" onRequestClose={() => setJoinModalOpen(false)}>
+				<View style={{ flex: 1, justifyContent: "center", padding: 20, backgroundColor: theme.overlay, position: "relative" }}>
+					<AccessiblePressable
+						accessibilityLabel="Close join project dialog"
+						onPress={() => setJoinModalOpen(false)}
+						style={StyleSheet.absoluteFillObject}
+					/>
+					<View style={{
+						backgroundColor: cardBg,
+						padding: 20,
+						borderRadius: 16,
+						zIndex: 1,
+						maxWidth: 440,
+						width: "100%",
+						alignSelf: "center",
+						shadowColor: shadowColor,
+						shadowOffset: { width: 0, height: 8 },
+						shadowOpacity: 0.14,
+						shadowRadius: 20,
+						elevation: 10,
+					}}>
+						<Text style={{ fontWeight: "700", fontSize: 16, marginBottom: 14, color: textColor }}>Join a Project</Text>
+						<TextInput
+							placeholder="Join code"
+							placeholderTextColor={mutedColor}
+							value={joinCode}
+							onChangeText={setJoinCode}
+							autoCapitalize="characters"
+							style={{ borderWidth: 1, borderColor, borderRadius: 8, padding: 10, marginBottom: 10, letterSpacing: 2, color: textColor, backgroundColor: theme.inputBg }}
+						/>
+						<TextInput
+							placeholder="Your display name"
+							placeholderTextColor={mutedColor}
+							value={joinDisplayName}
+							onChangeText={setJoinDisplayName}
+							style={{ borderWidth: 1, borderColor, borderRadius: 8, padding: 10, marginBottom: 14, color: textColor, backgroundColor: theme.inputBg }}
+						/>
+						<View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+							<AppButton title="Cancel" onPress={() => setJoinModalOpen(false)} variant="secondary" />
+							<AppButton
+								title="Join"
+								onPress={async () => {
+									setJoinLoading(true);
+									try {
+										const projId = await joinProjectServer({ joinCode: joinCode.trim(), displayName: joinDisplayName.trim() });
+										setToast({ message: "Joined project!", type: "success" });
+										setJoinModalOpen(false);
+										setJoinCode("");
+										await reload();
+										router.push(`/project/${projId}`);
+									} catch (e: any) {
+										setToast({ message: `Join failed: ${e?.message ?? String(e)}`, type: "error" });
+									} finally {
+										setJoinLoading(false);
+									}
+								}}
+								variant="primary"
+								loading={joinLoading}
+							/>
+						</View>
+					</View>
+				</View>
+			</Modal>
+		</>
 	);
 }

@@ -47,7 +47,12 @@ export default function ProjectDetailRoute() {
 	const [plannedMembers, setPlannedMembers] = useState<any[]>([]);
 	const [taskLinks, setTaskLinks] = useState<any[]>([]);
 	const [myMemberId, setMyMemberId] = useState<string | null>(null);
-	const [collapsed, setCollapsed] = useState<Record<string, boolean>>({ deliverables: true });
+	/** Section expand toggles — all default closed. */
+	const [expandedSections, setExpandedSections] = useState({
+		deliverables: false,
+		files: false,
+		assignment: false,
+	});
 	const [expandedFiles, setExpandedFiles] = useState<Record<string, boolean>>({});
 	const [lastAction, setLastAction] = useState<any | null>(null);
 	const [showSnackbar, setShowSnackbar] = useState(false);
@@ -159,21 +164,23 @@ export default function ProjectDetailRoute() {
 	const renderDeliverablesSection = (marginTop = 16) => (
 		<View style={{ marginTop }}>
 			<AccessiblePressable
-				onPress={() => setCollapsed((c) => ({ ...c, deliverables: !c.deliverables }))}
-				accessibilityLabel={collapsed.deliverables ? "Expand deliverables section" : "Collapse deliverables section"}
+				onPress={() => setExpandedSections((s) => ({ ...s, deliverables: !s.deliverables }))}
+				accessibilityLabel={expandedSections.deliverables ? "Collapse deliverables section" : "Expand deliverables section"}
 				style={{ marginBottom: 8, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}
 			>
 				<View style={{ flex: 1 }}>
 					<Text style={{ fontWeight: "700", fontSize: 15, color: textColor }}>
 						Deliverables{(deliverables ?? []).length > 0 ? ` (${deliverables.length})` : ""}
 					</Text>
-					<Text style={{ color: mutedColor, fontSize: 12, marginTop: 2 }}>
-						What the group must produce. Add links on each item below.
-					</Text>
+					{expandedSections.deliverables ? (
+						<Text style={{ color: mutedColor, fontSize: 12, marginTop: 2 }}>
+							What the group must produce. Add links on each item below.
+						</Text>
+					) : null}
 				</View>
-				<Text style={{ color: mutedColor }}>{collapsed.deliverables ? "▸" : "▾"}</Text>
+				<Text style={{ color: mutedColor }}>{expandedSections.deliverables ? "▾" : "▸"}</Text>
 			</AccessiblePressable>
-			{!collapsed.deliverables ? (
+			{expandedSections.deliverables ? (
 				<View style={{ backgroundColor: cardBg, padding: 12, borderRadius: 12 }}>
 					{(deliverables ?? []).length === 0 ? (
 						<Text style={{ color: mutedColor }}>No deliverables yet</Text>
@@ -244,6 +251,10 @@ export default function ProjectDetailRoute() {
 	useEffect(() => {
 		reload();
 	}, []);
+
+	useEffect(() => {
+		setExpandedSections({ deliverables: false, files: false, assignment: false });
+	}, [id]);
 
 	useEffect(() => {
 		if (sessionMemberId && sessionMemberId !== myMemberId) {
@@ -994,20 +1005,20 @@ export default function ProjectDetailRoute() {
 						const assignText = (project.assignmentDetails ?? project.assignment_details ?? "").trim();
 						const assignTitle = (project.assignmentTitle ?? project.assignment_title ?? "").trim();
 						if (!assignTitle && !assignText) return null;
-						const isExpanded = collapsed.assignment === true;
+						const assignmentExpanded = expandedSections.assignment;
 						return (
 							<View style={{ marginTop: isWide ? 8 : 12 }}>
 								<AccessiblePressable
-									onPress={() => setCollapsed((c) => ({ ...c, assignment: !c.assignment }))}
-									accessibilityLabel={collapsed.assignment ? "Expand assignment section" : "Collapse assignment section"}
+									onPress={() => setExpandedSections((s) => ({ ...s, assignment: !s.assignment }))}
+									accessibilityLabel={assignmentExpanded ? "Collapse assignment section" : "Expand assignment section"}
 									style={{ backgroundColor: cardBg, padding: 12, borderRadius: 12 }}
 								>
 									<View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
 										<Text style={{ fontWeight: "700", color: colors.pennRed, fontSize: 15 }}>Assignment</Text>
-										<Text style={{ color: mutedColor, fontSize: 16 }}>{isExpanded ? "▾" : "▸"}</Text>
+										<Text style={{ color: mutedColor, fontSize: 16 }}>{assignmentExpanded ? "▾" : "▸"}</Text>
 									</View>
 
-									{!isExpanded ? (
+									{!assignmentExpanded ? (
 										<View style={{ marginTop: 6 }}>
 											{assignTitle ? <Text style={{ fontWeight: "600", color: textColor, marginBottom: 2 }} numberOfLines={1}>{assignTitle}</Text> : null}
 											{assignText ? (
@@ -1016,7 +1027,7 @@ export default function ProjectDetailRoute() {
 										</View>
 									) : null}
 
-									{isExpanded ? (
+									{assignmentExpanded ? (
 										<View style={{ marginTop: 8 }}>
 											{assignTitle ? <Text style={{ fontWeight: "700", marginBottom: 6, color: textColor }}>{assignTitle}</Text> : null}
 											{assignText ? <Text style={{ color: textColor, lineHeight: 20 }}>{assignText}</Text> : null}
@@ -1033,16 +1044,16 @@ export default function ProjectDetailRoute() {
 					{fileResources.length > 0 ? (
 					<View style={{ marginTop: isWide ? 8 : 16 }}>
 						<AccessiblePressable
-							onPress={() => setCollapsed((c) => ({ ...c, files: !c.files }))}
-							accessibilityLabel={collapsed.files ? "Expand files section" : "Collapse files section"}
+							onPress={() => setExpandedSections((s) => ({ ...s, files: !s.files }))}
+							accessibilityLabel={expandedSections.files ? "Collapse files section" : "Expand files section"}
 							style={{ marginBottom: 8, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}
 						>
 							<Text style={{ fontWeight: "700", fontSize: 15, color: textColor }}>
 								Files ({fileResources.length})
 							</Text>
-							<Text style={{ color: mutedColor }}>{collapsed.files ? "▸" : "▾"}</Text>
+							<Text style={{ color: mutedColor }}>{expandedSections.files ? "▾" : "▸"}</Text>
 						</AccessiblePressable>
-						{!collapsed.files ? (
+						{expandedSections.files ? (
 							<View style={{ backgroundColor: cardBg, padding: 12, borderRadius: 12 }}>
 									{fileResources.map((r: any) => {
 										const isExpanded = expandedFiles[r.id] === true;
